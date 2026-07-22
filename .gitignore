@@ -1,0 +1,24 @@
+.DS_Store
+.build/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.moved-aside
+*.swp
+Cellium.sqlite
+Cellium.sqlite-*
+
+# Local agent state and development secrets
+.agents/
+.claude/
+.mendcode/
+*.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.mobileprovision
+*.provisionprofile
+*.secret
