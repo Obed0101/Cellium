@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="Branding/Cellium_Branding_Assets/01_Master_Logo/Cellium_logo_horizontal_brand_4096.png" alt="Cellium" width="520">
+  <img src="Branding/Cellium_Branding_Assets/07_Backgrounds/Cellium_Hero_01_1920x1080.png" alt="Cellium emerald signal banner" width="960">
 
   <h1>Cellium</h1>
 
@@ -33,6 +33,21 @@ Cellium answers the practical battery questions first:
 </p>
 
 The dashboard is designed to make the important state visible immediately: battery percentage, active cells, temperature, power source, health, cycles, system load and historical trends.
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="Documentation/images/cellium-showcase-2.png" alt="Clean Cellium dashboard with battery alert and history" width="360">
+      <br>
+      <sub>Current state, alerts and battery history</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="Documentation/images/cellium-showcase-3.png" alt="Cellium charts, app impact and local learning" width="360">
+      <br>
+      <sub>System trends, app impact and local learning</sub>
+    </td>
+  </tr>
+</table>
 
 ## Smart by design
 
