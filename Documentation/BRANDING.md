@@ -4,8 +4,9 @@ Cellium uses a compact, geometric identity built around a seven-cell symbol for 
 
 ## Public assets
 
-- `Branding/Cellium_Branding_Assets/01_Master_Logo/Cellium_logo_horizontal_brand_4096.png` — README banner artwork.
+- `Branding/Cellium_Branding_Assets/01_Master_Logo/Cellium_logo_horizontal_brand_4096.png` — compact horizontal lockup export.
 - `Branding/Cellium_Branding_Assets/01_Master_Logo/Cellium_logo_horizontal_brand.svg` — scalable brand lockup.
+- `Branding/Cellium_Branding_Assets/07_Backgrounds/Cellium_Hero_01_1920x1080.png` — README hero banner.
 - `App/Resources/Cellium_symbol_white.svg` — application menu-bar symbol.
 - `App/Resources/Assets.xcassets/` — application icon resources.
 

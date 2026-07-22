@@ -1,9 +1,7 @@
 <div align="center">
-  <img src="Branding/Cellium_Branding_Assets/01_Master_Logo/Cellium_logo_horizontal_brand_4096.png" alt="Cellium" width="760">
+  <img src="Branding/Cellium_Branding_Assets/07_Backgrounds/Cellium_Hero_01_1920x1080.png" alt="Cellium emerald wave banner" width="960">
 
-  <h1>Cellium</h1>
-
-  <p>Native macOS battery telemetry for people who want useful power data without a cloud dashboard.</p>
+  <p><strong>Native macOS battery telemetry for people who want useful power data without a cloud dashboard.</strong></p>
 
   <p>
     <a href="https://github.com/Obed0101/Cellium/actions/workflows/ci.yml"><img src="https://github.com/Obed0101/Cellium/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
