@@ -22,3 +22,13 @@ Cellium.sqlite-*
 *.mobileprovision
 *.provisionprofile
 *.secret
+
+# Local planning material and unselected branding source files
+CLAUDE.md
+PRODUCT.md
+Cellium_Prompt_Maestro.md
+Branding/Cellium_Branding_Assets/*
+!Branding/Cellium_Branding_Assets/01_Master_Logo/
+Branding/Cellium_Branding_Assets/01_Master_Logo/*
+!Branding/Cellium_Branding_Assets/01_Master_Logo/Cellium_logo_horizontal_brand.svg
+!Branding/Cellium_Branding_Assets/01_Master_Logo/Cellium_logo_horizontal_brand_4096.png
