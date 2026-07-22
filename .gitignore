@@ -8,6 +8,7 @@ xcuserdata/
 *.swp
 Cellium.sqlite
 Cellium.sqlite-*
+Distribution/*.dmg
 
 # Local agent state and development secrets
 .agents/

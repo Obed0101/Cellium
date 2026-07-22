@@ -49,7 +49,22 @@ swift test
 swift build --product cellium
 ```
 
-To run the menu bar application, open `Cellium.xcodeproj` in Xcode and launch the `CelliumApp` scheme. Code signing and notarization are intentionally outside the local development quick start.
+To run the menu bar application, open `Cellium.xcodeproj` in Xcode and launch the `Cellium` scheme. Code signing and notarization are intentionally outside the local development quick start.
+
+## Install from a DMG
+
+Build the standard macOS drag-to-Applications installer locally:
+
+```bash
+./Scripts/build-dmg.sh
+open Distribution/Cellium-0.1.0.dmg
+```
+
+The disk image contains `Cellium.app` and an `Applications` shortcut. The default build is unsigned for local testing; Developer ID signing and notarization can be supplied through the script environment when release credentials are available. Tagged GitHub releases use the same packaging workflow.
+
+## Updates
+
+Cellium can optionally check the public GitHub Releases API once per day. The setting is disabled by default, and the app never downloads or executes a remote binary automatically. Enable it from **Settings → Updates**, or use **Check now** for a manual check.
 
 ## Architecture
 

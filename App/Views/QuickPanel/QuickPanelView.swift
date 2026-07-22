@@ -109,6 +109,9 @@ final class BatteryViewModel: ObservableObject {
     @Published private(set) var manualWeatherLongitude: String
     @Published private(set) var proactiveAlert: ProactiveAlert?
     @Published private(set) var isRefreshingHistory = false
+    @Published private(set) var updateCheckEnabled: Bool
+    @Published private(set) var updateState: GitHubUpdateState = .idle
+    @Published private(set) var lastUpdateCheck: Date?
 
     var onProactiveAlert: ((ProactiveAlert) -> Void)?
 
@@ -119,6 +122,8 @@ final class BatteryViewModel: ObservableObject {
     private let store: SQLiteStore?
     private let weatherCoordinator: WeatherCoordinator
     private let processMonitor = ProcessEnergyMonitor()
+    private let updateChecker = GitHubUpdateChecker()
+    private var updateTask: Task<Void, Never>?
     private var panelVisible = false
     private var liveRefreshTask: Task<Void, Never>?
     private var panelVisibilityTask: Task<Void, Never>?
@@ -145,6 +150,8 @@ final class BatteryViewModel: ObservableObject {
         self.learningEnabled = defaults.object(forKey: "cellium.learningEnabled") as? Bool ?? true
         self.temperatureAlertCelsius = defaults.object(forKey: "cellium.temperatureAlertCelsius") as? Double ?? 40
         self.criticalChargePercent = defaults.object(forKey: "cellium.criticalChargePercent") as? Int ?? 20
+        self.updateCheckEnabled = defaults.object(forKey: "cellium.updateCheckEnabled") as? Bool ?? false
+        self.lastUpdateCheck = defaults.object(forKey: "cellium.lastUpdateCheck") as? Date
         self.weatherCoordinator = WeatherCoordinator()
         self.weatherLocationMode = weatherCoordinator.mode
         self.manualWeatherLabel = weatherCoordinator.manualLabel
@@ -278,6 +285,50 @@ final class BatteryViewModel: ObservableObject {
 
     var copy: CelliumCopy {
         CelliumCopy(language: language)
+    }
+
+    private var installedVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0"
+    }
+
+    var updateReleaseURL: URL? {
+        guard case let .available(_, _, url) = updateState else { return nil }
+        return url
+    }
+
+    var isCheckingForUpdates: Bool {
+        if case .checking = updateState { return true }
+        return false
+    }
+
+    var updateStatusTitle: String {
+        switch updateState {
+        case .idle:
+            return copy(.checkForUpdates)
+        case .checking:
+            return copy(.checkingForUpdates)
+        case let .current(version):
+            return String(format: copy(.updateCurrent), version)
+        case let .available(version, _, _):
+            return String(format: copy(.updateAvailable), version)
+        case .failed:
+            return copy(.updateCheckFailed)
+        }
+    }
+
+    var updateStatusDetail: String {
+        switch updateState {
+        case .idle:
+            return copy(.updateCheckDetail)
+        case .checking:
+            return copy(.checkingForUpdatesDetail)
+        case let .current(version):
+            return String(format: copy(.updateCurrentDetail), version)
+        case let .available(_, name, _):
+            return name.isEmpty ? copy(.updateAvailableDetail) : name
+        case .failed:
+            return copy(.updateFailedDetail)
+        }
     }
 
     var historyRangeTitle: String {
@@ -679,6 +730,66 @@ final class BatteryViewModel: ObservableObject {
         showingSettings = showing
     }
 
+    func setUpdateCheckEnabled(_ enabled: Bool) {
+        updateCheckEnabled = enabled
+        defaults.set(enabled, forKey: "cellium.updateCheckEnabled")
+        if enabled {
+            checkForUpdatesIfNeeded(force: true)
+        } else {
+            updateTask?.cancel()
+            updateTask = nil
+            updateState = .idle
+        }
+    }
+
+    func checkForUpdates() {
+        checkForUpdatesIfNeeded(force: true)
+    }
+
+    func checkForUpdatesIfNeeded(force: Bool = false) {
+        guard force || updateCheckEnabled else { return }
+        if !force,
+           let lastUpdateCheck,
+           Date().timeIntervalSince(lastUpdateCheck) < 86_400 {
+            return
+        }
+
+        updateTask?.cancel()
+        updateState = .checking
+        updateTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await updateChecker.check(currentVersion: installedVersion)
+                guard !Task.isCancelled else { return }
+                let checkedAt = Date()
+                lastUpdateCheck = checkedAt
+                defaults.set(checkedAt, forKey: "cellium.lastUpdateCheck")
+                switch result {
+                case let .current(version):
+                    updateState = .current(version: version)
+                case let .available(release):
+                    updateState = .available(
+                        version: release.tagName,
+                        name: release.name,
+                        url: release.htmlURL
+                    )
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled else { return }
+                lastUpdateCheck = Date()
+                defaults.set(lastUpdateCheck, forKey: "cellium.lastUpdateCheck")
+                updateState = .failed
+            }
+        }
+    }
+
+    func openUpdatePage() {
+        guard let updateReleaseURL else { return }
+        NSWorkspace.shared.open(updateReleaseURL)
+    }
+
     func setWeatherLocationMode(_ mode: WeatherLocationMode) {
         weatherCoordinator.setMode(mode)
         syncWeatherState()
@@ -760,6 +871,7 @@ final class BatteryViewModel: ObservableObject {
     func startMonitoring() {
         let mode = backgroundMode
         weatherCoordinator.start()
+        checkForUpdatesIfNeeded()
         syncWeatherState()
         backgroundHealthTask?.cancel()
         backgroundHealthTask = Task { @MainActor [weak self] in
