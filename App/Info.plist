@@ -9,9 +9,11 @@
     <key>CFBundleName</key>
     <string>Cellium</string>
     <key>CFBundleIdentifier</key>
-    <string>com.mendcode.cellium</string>
+    <string>com.obed0101.cellium</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
     <key>CFBundleShortVersionString</key>
     <string>0.1.0</string>
     <key>CFBundleVersion</key>

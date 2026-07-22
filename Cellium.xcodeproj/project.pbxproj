@@ -13,6 +13,7 @@
 		A10000000000000000000083 /* QuickPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000013 /* QuickPanelView.swift */; };
 		A10000000000000000000086 /* CelliumDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000018 /* CelliumDashboardView.swift */; };
 		A10000000000000000000087 /* CelliumWeather.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000019 /* CelliumWeather.swift */; };
+		A10000000000000000000088 /* GitHubUpdateChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000020 /* GitHubUpdateChecker.swift */; };
 		A10000000000000000000084 /* Cellium symbol in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000015 /* Cellium_symbol_white.svg */; };
 		A10000000000000000000085 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000016 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
@@ -24,6 +25,7 @@
 		A10000000000000000000013 /* QuickPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickPanelView.swift; sourceTree = "<group>"; };
 		A10000000000000000000018 /* CelliumDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CelliumDashboardView.swift; sourceTree = "<group>"; };
 		A10000000000000000000019 /* CelliumWeather.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CelliumWeather.swift; sourceTree = "<group>"; };
+		A10000000000000000000020 /* GitHubUpdateChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitHubUpdateChecker.swift; sourceTree = "<group>"; };
 		A10000000000000000000014 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A10000000000000000000015 /* Cellium_symbol_white.svg */ = {isa = PBXFileReference; lastKnownFileType = image.svg; path = Cellium_symbol_white.svg; sourceTree = "<group>"; };
 		A10000000000000000000016 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -62,12 +64,21 @@
 			children = (
 				A10000000000000000000010 /* CelliumApp.swift */,
 				A10000000000000000000011 /* AppDelegate.swift */,
+				A10000000000000000000009 /* Services */,
 				A10000000000000000000006 /* DesignSystem */,
 				A10000000000000000000007 /* Views */,
 				A10000000000000000000005 /* Resources */,
 				A10000000000000000000014 /* Info.plist */,
 			);
 			path = App;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000009 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000020 /* GitHubUpdateChecker.swift */,
+			);
+			path = Services;
 			sourceTree = "<group>";
 		};
 		A10000000000000000000005 /* Resources */ = {
@@ -183,6 +194,7 @@
 				A10000000000000000000083 /* QuickPanelView.swift in Sources */,
 				A10000000000000000000086 /* CelliumDashboardView.swift in Sources */,
 				A10000000000000000000087 /* CelliumWeather.swift in Sources */,
+				A10000000000000000000088 /* GitHubUpdateChecker.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -224,7 +236,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.mendcode.cellium;
+				PRODUCT_BUNDLE_IDENTIFIER = com.obed0101.cellium;
 				PRODUCT_NAME = Cellium;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 6.0;
@@ -244,7 +256,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.mendcode.cellium;
+				PRODUCT_BUNDLE_IDENTIFIER = com.obed0101.cellium;
 				PRODUCT_NAME = Cellium;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 6.0;

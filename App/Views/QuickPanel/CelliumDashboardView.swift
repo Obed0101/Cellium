@@ -108,6 +108,20 @@ enum CelliumText {
      case hardwareManaged
      case close
      case general
+     case updates
+     case automaticUpdateChecks
+     case automaticUpdateChecksDetail
+     case updateCheckDetail
+     case checkForUpdates
+     case checkingForUpdates
+     case checkingForUpdatesDetail
+     case updateCurrent
+     case updateCurrentDetail
+     case updateAvailable
+     case updateAvailableDetail
+     case updateCheckFailed
+     case updateFailedDetail
+     case openRelease
      case language
     case spanish
     case english
@@ -238,8 +252,23 @@ struct CelliumCopy {
         case .chargeLimit: return "Límite de carga"
         case .hardwareManaged: return "Gestionado por el hardware"
         case .close: return "Cerrar"
-        case .general: return "General"
-        case .language: return "Idioma"
+         case .general: return "General"
+         case .updates: return "Actualizaciones"
+         case .automaticUpdateChecks: return "Buscar actualizaciones"
+         case .automaticUpdateChecksDetail: return "Consulta GitHub una vez al día cuando está activado."
+         case .updateCheckDetail: return "Pulsa Buscar ahora para consultar GitHub."
+         case .checkForUpdates: return "Buscar ahora"
+         case .checkingForUpdates: return "Buscando…"
+         case .checkingForUpdatesDetail: return "Consultando el último release público en GitHub."
+         case .updateCurrent: return "Al día · %@"
+         case .updateCurrentDetail: return "Estás usando la versión %@."
+         case .updateAvailable: return "Nueva versión · %@"
+         case .updateAvailableDetail: return "Hay una versión nueva disponible en GitHub."
+         case .updateCheckFailed: return "No se pudo comprobar"
+         case .updateFailedDetail: return "Revisa la conexión e inténtalo de nuevo."
+         case .openRelease: return "Ver release"
+         case .language: return "Idioma"
+
         case .spanish: return "Español"
         case .english: return "English"
         case .sampling: return "Sincronización"
@@ -358,8 +387,23 @@ struct CelliumCopy {
         case .chargeLimit: return "Charge limit"
         case .hardwareManaged: return "Managed by hardware"
         case .close: return "Close"
-        case .general: return "General"
-        case .language: return "Language"
+         case .general: return "General"
+         case .updates: return "Updates"
+         case .automaticUpdateChecks: return "Check for updates"
+         case .automaticUpdateChecksDetail: return "Ask GitHub once a day when enabled."
+         case .updateCheckDetail: return "Press Check now to query GitHub."
+         case .checkForUpdates: return "Check now"
+         case .checkingForUpdates: return "Checking…"
+         case .checkingForUpdatesDetail: return "Checking the latest public release on GitHub."
+         case .updateCurrent: return "Up to date · %@"
+         case .updateCurrentDetail: return "You are running version %@."
+         case .updateAvailable: return "New version · %@"
+         case .updateAvailableDetail: return "A newer version is available on GitHub."
+         case .updateCheckFailed: return "Check failed"
+         case .updateFailedDetail: return "Check your connection and try again."
+         case .openRelease: return "View release"
+         case .language: return "Language"
+
         case .spanish: return "Español"
         case .english: return "English"
         case .sampling: return "Synchronization"
@@ -954,6 +998,42 @@ struct CelliumDashboardView: View {
                     }
                     .labelsHidden()
                     .pickerStyle(.menu)
+                }
+            }
+
+            SettingsSection(title: model.copy(.updates)) {
+                SettingsRow(
+                    title: model.copy(.automaticUpdateChecks),
+                    detail: model.copy(.automaticUpdateChecksDetail)
+                ) {
+                    Toggle("", isOn: Binding(
+                        get: { model.updateCheckEnabled },
+                        set: { model.setUpdateCheckEnabled($0) }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .accessibilityLabel(model.copy(.automaticUpdateChecks))
+                }
+
+                SettingsRow(
+                    title: model.updateStatusTitle,
+                    detail: model.updateStatusDetail
+                ) {
+                    Button {
+                        if model.updateReleaseURL == nil {
+                            model.checkForUpdates()
+                        } else {
+                            model.openUpdatePage()
+                        }
+                    } label: {
+                        Label(
+                            model.updateReleaseURL == nil ? model.copy(.checkForUpdates) : model.copy(.openRelease),
+                            systemImage: model.updateReleaseURL == nil ? "arrow.clockwise" : "arrow.up.right"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(model.isCheckingForUpdates)
                 }
             }
 

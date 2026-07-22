@@ -1,9 +1,7 @@
 <div align="center">
-  <img src="Branding/Cellium_Branding_Assets/01_Master_Logo/Cellium_logo_horizontal_brand_4096.png" alt="Cellium" width="760">
+  <img src="Branding/Cellium_Branding_Assets/07_Backgrounds/Cellium_Hero_02_1920x1080.png" alt="Cellium emerald signal banner" width="960">
 
-  <h1>Cellium</h1>
-
-  <p>Native macOS battery telemetry for people who want useful power data without a cloud dashboard.</p>
+  <p><strong>Native macOS battery telemetry for people who want useful power data without a cloud dashboard.</strong></p>
 
   <p>
     <a href="https://github.com/Obed0101/Cellium/actions/workflows/ci.yml"><img src="https://github.com/Obed0101/Cellium/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
@@ -51,7 +49,22 @@ swift test
 swift build --product cellium
 ```
 
-To run the menu bar application, open `Cellium.xcodeproj` in Xcode and launch the `CelliumApp` scheme. Code signing and notarization are intentionally outside the local development quick start.
+To run the menu bar application, open `Cellium.xcodeproj` in Xcode and launch the `Cellium` scheme. Code signing and notarization are intentionally outside the local development quick start.
+
+## Install from a DMG
+
+Build the standard macOS drag-to-Applications installer locally:
+
+```bash
+./Scripts/build-dmg.sh
+open Distribution/Cellium-0.1.0.dmg
+```
+
+The disk image contains `Cellium.app` and an `Applications` shortcut. The default build is unsigned for local testing; Developer ID signing and notarization can be supplied through the script environment when release credentials are available. Tagged GitHub releases use the same packaging workflow.
+
+## Updates
+
+Cellium can optionally check the public GitHub Releases API once per day. The setting is disabled by default, and the app never downloads or executes a remote binary automatically. Enable it from **Settings → Updates**, or use **Check now** for a manual check.
 
 ## Architecture
 
