@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="Branding/Cellium_Branding_Assets/07_Backgrounds/Cellium_Hero_02_1920x1080.png" alt="Cellium emerald signal banner" width="960">
+  <img src="Branding/Cellium_Branding_Assets/07_Backgrounds/Cellium_Hero_01_1920x1080.png" alt="Cellium emerald signal banner" width="960">
 
   <p><strong>Native macOS battery telemetry for people who want useful power data without a cloud dashboard.</strong></p>
 
