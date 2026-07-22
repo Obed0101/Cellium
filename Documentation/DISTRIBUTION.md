@@ -11,7 +11,7 @@ Run it from the repository root:
 
 ```bash
 ./Scripts/build-dmg.sh
-open Distribution/Cellium-0.1.0.dmg
+open Distribution/Cellium-0.1.1.dmg
 ```
 
 The script targets Apple Silicon by default and uses an unsigned Release build for local testing. Override the build settings when a Developer ID identity is available:
