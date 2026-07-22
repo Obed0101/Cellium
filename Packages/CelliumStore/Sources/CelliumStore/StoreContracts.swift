@@ -7,23 +7,54 @@ public struct StoreConfiguration: Sendable, Equatable {
     public let minuteRetentionDays: Int
     public let quarterHourRetentionDays: Int
     public let dailyRetentionDays: Int?
+    public let alertRetentionDays: Int
 
     public init(
         rawRetentionDays: Int = 7,
         rawSampleLimit: Int = 100_000,
         minuteRetentionDays: Int = 90,
         quarterHourRetentionDays: Int = 730,
-        dailyRetentionDays: Int? = nil
+        dailyRetentionDays: Int? = nil,
+        alertRetentionDays: Int = 365
     ) {
         self.rawRetentionDays = max(1, rawRetentionDays)
         self.rawSampleLimit = max(1_000, rawSampleLimit)
         self.minuteRetentionDays = max(1, minuteRetentionDays)
         self.quarterHourRetentionDays = max(1, quarterHourRetentionDays)
         self.dailyRetentionDays = dailyRetentionDays.map { max(1, $0) }
+        self.alertRetentionDays = max(1, alertRetentionDays)
     }
 }
 
 public typealias StoredBatterySample = BatterySample
+
+public struct StoredProcessSample: Codable, Equatable, Sendable {
+    public let processID: Int32
+    public let name: String
+    public let timestamp: Date
+    public let cpuPercent: Double
+    public let residentMemoryBytes: Int64?
+    public let memoryPercent: Double?
+    public let estimatedBatteryPercentPerMinute: Double?
+
+    public init(
+        processID: Int32,
+        name: String,
+        timestamp: Date,
+        cpuPercent: Double,
+        residentMemoryBytes: Int64? = nil,
+        memoryPercent: Double? = nil,
+        estimatedBatteryPercentPerMinute: Double? = nil
+    ) {
+        self.processID = processID
+        self.name = name
+        self.timestamp = timestamp
+        self.cpuPercent = cpuPercent
+        self.residentMemoryBytes = residentMemoryBytes
+        self.memoryPercent = memoryPercent
+        self.estimatedBatteryPercentPerMinute = estimatedBatteryPercentPerMinute
+    }
+}
 
 public struct SampleEvidence: Codable, Equatable, Sendable {
     public let sampleCount: Int
@@ -41,6 +72,34 @@ public struct SampleEvidence: Codable, Equatable, Sendable {
         self.observedDays = observedDays
         self.firstSampleDate = firstSampleDate
         self.lastSampleDate = lastSampleDate
+    }
+}
+
+public enum AlertSeverity: String, Codable, CaseIterable, Sendable {
+    case info
+    case warning
+    case critical
+}
+
+public struct StoredAlertEvent: Codable, Equatable, Sendable {
+    public let identifier: String
+    public let occurredAt: Date
+    public let severity: AlertSeverity
+    public let subject: String?
+    public let measurements: [String: Double]
+
+    public init(
+        identifier: String,
+        occurredAt: Date,
+        severity: AlertSeverity = .warning,
+        subject: String? = nil,
+        measurements: [String: Double] = [:]
+    ) {
+        self.identifier = identifier
+        self.occurredAt = occurredAt
+        self.severity = severity
+        self.subject = subject
+        self.measurements = measurements
     }
 }
 

@@ -9,9 +9,11 @@ final class SQLiteStoreTests: XCTestCase {
 
         let schemaVersion = try await store.schemaVersion()
         let sampleCount = try await store.sampleCount()
+        let alertCount = try await store.alertCount()
 
-        XCTAssertEqual(schemaVersion, 1)
+        XCTAssertEqual(schemaVersion, 2)
         XCTAssertEqual(sampleCount, 0)
+        XCTAssertEqual(alertCount, 0)
         XCTAssertTrue(FileManager.default.fileExists(atPath: store.databaseURL.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: store.databaseURL.path + "-wal"))
     }
@@ -185,6 +187,111 @@ final class SQLiteStoreTests: XCTestCase {
         XCTAssertEqual(emptyResult, [])
     }
 
+    func testPersistsProcessSamplesNewestFirst() async throws {
+        let store = try makeStore()
+        let firstDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let secondDate = firstDate.addingTimeInterval(60)
+        let first = StoredProcessSample(
+            processID: 10,
+            name: "First App",
+            timestamp: firstDate,
+            cpuPercent: 12.5,
+            residentMemoryBytes: 128 * 1_024 * 1_024,
+            memoryPercent: 2.5,
+            estimatedBatteryPercentPerMinute: 0.03
+        )
+        let second = StoredProcessSample(
+            processID: 20,
+            name: "Second App",
+            timestamp: secondDate,
+            cpuPercent: 32,
+            residentMemoryBytes: 256 * 1_024 * 1_024,
+            memoryPercent: 5,
+            estimatedBatteryPercentPerMinute: nil
+        )
+
+        let written = try await store.appendProcessSamples([first, second])
+        let samples = try await store.fetchProcessSamples(limit: 10)
+        let filtered = try await store.fetchProcessSamples(since: secondDate, limit: 10)
+        let count = try await store.processSampleCount()
+
+        XCTAssertEqual(written, 2)
+        XCTAssertEqual(samples, [second, first])
+        XCTAssertEqual(filtered, [second])
+        XCTAssertEqual(count, 2)
+    }
+
+    func testPersistsAlertEventsNewestFirst() async throws {
+        let store = try makeStore()
+        let firstDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let secondDate = firstDate.addingTimeInterval(60)
+        let first = StoredAlertEvent(
+            identifier: "discharge",
+            occurredAt: firstDate,
+            measurements: ["percentPerMinute": 0.42]
+        )
+        let second = StoredAlertEvent(
+            identifier: "memory:42",
+            occurredAt: secondDate,
+            subject: "Example",
+            measurements: ["memoryPercent": 22]
+        )
+
+        let firstID = try await store.appendAlertEvent(first)
+        let secondID = try await store.appendAlertEvent(second)
+        let events = try await store.fetchAlertEvents(limit: 10)
+        let alertCount = try await store.alertCount()
+        let filteredEvents = try await store.fetchAlertEvents(since: secondDate, limit: 10)
+
+        XCTAssertLessThan(firstID, secondID)
+        XCTAssertEqual(events, [second, first])
+        XCTAssertEqual(alertCount, 2)
+        XCTAssertEqual(filteredEvents, [second])
+    }
+
+    func testRejectsInvalidAlertMeasurements() async throws {
+        let store = try makeStore()
+        let invalid = StoredAlertEvent(
+            identifier: "invalid",
+            occurredAt: Date(),
+            measurements: ["value": .nan]
+        )
+
+        do {
+            _ = try await store.appendAlertEvent(invalid)
+            XCTFail("Expected invalid alert measurements to be rejected")
+        } catch {
+            XCTAssertEqual(error as? StoreError, .invalidData)
+        }
+        let alertCount = try await store.alertCount()
+        XCTAssertEqual(alertCount, 0)
+    }
+
+    func testRetentionRemovesExpiredAlertEvents() async throws {
+        let store = try makeStore(configuration: StoreConfiguration(alertRetentionDays: 1))
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        _ = try await store.appendAlertEvent(
+            StoredAlertEvent(
+                identifier: "old",
+                occurredAt: now.addingTimeInterval(-2 * 86_400)
+            )
+        )
+        _ = try await store.appendAlertEvent(
+            StoredAlertEvent(
+                identifier: "recent",
+                occurredAt: now.addingTimeInterval(-3_600)
+            )
+        )
+
+        let deleted = try await store.applyRetention(now: now)
+        let alertCount = try await store.alertCount()
+        let remainingEvents = try await store.fetchAlertEvents()
+
+        XCTAssertEqual(deleted, 1)
+        XCTAssertEqual(alertCount, 1)
+        XCTAssertEqual(remainingEvents[0].identifier, "recent")
+    }
+
     func testRetentionRemovesOnlyExpiredRawSamples() async throws {
         let store = try makeStore(
             configuration: StoreConfiguration(
@@ -331,9 +438,44 @@ final class SQLiteStoreTests: XCTestCase {
 
         let diagnostics = try await store.diagnostics()
 
-        XCTAssertEqual(diagnostics.schemaVersion, 1)
+        XCTAssertEqual(diagnostics.schemaVersion, 2)
         XCTAssertGreaterThan(diagnostics.databaseSizeBytes, 0)
         XCTAssertGreaterThanOrEqual(diagnostics.walSizeBytes, 0)
+    }
+
+    func testMigratesExistingSchemaVersionOneToAlertEvents() async throws {
+        let databaseURL = try makeDatabaseURL()
+        var connection: OpaquePointer?
+        let openResult = sqlite3_open_v2(
+            databaseURL.path,
+            &connection,
+            SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
+            nil
+        )
+        defer {
+            if let connection {
+                sqlite3_close_v2(connection)
+            }
+        }
+        XCTAssertEqual(openResult, SQLITE_OK)
+        guard openResult == SQLITE_OK, let openedConnection = connection else { return }
+
+        let schemaSQL = """
+        CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at REAL NOT NULL);
+        INSERT INTO schema_migrations (version, applied_at) VALUES (1, 0);
+        """
+        XCTAssertEqual(sqlite3_exec(openedConnection, schemaSQL, nil, nil, nil), SQLITE_OK)
+        sqlite3_close_v2(openedConnection)
+        connection = nil
+
+        let store = try SQLiteStore(databaseURL: databaseURL)
+        let schemaVersion = try await store.schemaVersion()
+        XCTAssertEqual(schemaVersion, 2)
+        _ = try await store.appendAlertEvent(
+            StoredAlertEvent(identifier: "migrated", occurredAt: Date())
+        )
+        let alertCount = try await store.alertCount()
+        XCTAssertEqual(alertCount, 1)
     }
 
     func testRejectsCorruptDatabaseWithDiagnosticError() throws {
@@ -364,12 +506,12 @@ final class SQLiteStoreTests: XCTestCase {
 
         let schemaSQL = """
         CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at REAL NOT NULL);
-        INSERT INTO schema_migrations (version, applied_at) VALUES (2, 0);
+        INSERT INTO schema_migrations (version, applied_at) VALUES (3, 0);
         """
         XCTAssertEqual(sqlite3_exec(connection, schemaSQL, nil, nil, nil), SQLITE_OK)
 
         XCTAssertThrowsError(try SQLiteStore(databaseURL: databaseURL)) { error in
-            XCTAssertEqual(error as? StoreError, .unsupportedSchema(version: 2))
+            XCTAssertEqual(error as? StoreError, .unsupportedSchema(version: 3))
         }
     }
 

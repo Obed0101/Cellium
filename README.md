@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="Branding/Cellium_Branding_Assets/07_Backgrounds/Cellium_Hero_02_1920x1080.png" alt="Cellium emerald signal banner" width="960">
+  <img src="Branding/Cellium_Branding_Assets/07_Backgrounds/Cellium_Hero_01_1920x1080.png" alt="Cellium emerald signal banner" width="960">
 
   <p><strong>Native macOS battery telemetry for people who want useful power data without a cloud dashboard.</strong></p>
 
@@ -57,7 +57,7 @@ Build the standard macOS drag-to-Applications installer locally:
 
 ```bash
 ./Scripts/build-dmg.sh
-open Distribution/Cellium-0.1.0.dmg
+open Distribution/Cellium-0.1.2.dmg
 ```
 
 The disk image contains `Cellium.app` and an `Applications` shortcut. The default build is unsigned for local testing; Developer ID signing and notarization can be supplied through the script environment when release credentials are available. Tagged GitHub releases use the same packaging workflow.
