@@ -2291,6 +2291,12 @@ private struct DashboardDualMetricPlot: View {
         let secondTemperatureRange: ClosedRange<Double>? = secondMetric == .temperature
             ? temperatureRange(for: plottedSecondValues)
             : nil
+        let firstChargeRange: ClosedRange<Double>? = firstMetric == .charge
+            ? chargeRange(for: plottedFirstValues)
+            : nil
+        let secondChargeRange: ClosedRange<Double>? = secondMetric == .charge
+            ? chargeRange(for: plottedSecondValues)
+            : nil
 
         return VStack(alignment: .leading, spacing: 4) {
             if plottedPoints.isEmpty {
@@ -2327,7 +2333,8 @@ private struct DashboardDualMetricPlot: View {
                                             value,
                                             metric: firstMetric,
                                             maximum: firstMaximum,
-                                            temperatureRange: firstTemperatureRange
+                                            temperatureRange: firstTemperatureRange,
+                                            chargeRange: firstChargeRange
                                         )
                                     )
                                     let rect = CGRect(
@@ -2353,7 +2360,8 @@ private struct DashboardDualMetricPlot: View {
                                             value,
                                             metric: secondMetric,
                                             maximum: secondMaximum,
-                                            temperatureRange: secondTemperatureRange
+                                            temperatureRange: secondTemperatureRange,
+                                            chargeRange: secondChargeRange
                                         )
                                     )
                                     let rect = CGRect(
@@ -2465,7 +2473,8 @@ private struct DashboardDualMetricPlot: View {
         _ value: Double,
         metric: DashboardHistoryMetric,
         maximum: Double,
-        temperatureRange: ClosedRange<Double>?
+        temperatureRange: ClosedRange<Double>?,
+        chargeRange: ClosedRange<Double>?
     ) -> CGFloat {
         switch metric {
         case .power:
@@ -2474,7 +2483,11 @@ private struct DashboardDualMetricPlot: View {
             guard let range = temperatureRange else { return 0 }
             let normalized = (value - range.lowerBound) / max(0.001, range.upperBound - range.lowerBound)
             return CGFloat(max(0, min(1, normalized)))
-        case .charge, .cpu, .memory, .diskRead, .diskWrite:
+        case .charge:
+            guard let range = chargeRange else { return 0 }
+            let normalized = (value - range.lowerBound) / max(0.001, range.upperBound - range.lowerBound)
+            return CGFloat(max(0, min(1, normalized)))
+        case .cpu, .memory, .diskRead, .diskWrite:
             return CGFloat(max(0, min(1, value / max(0.25, maximum))))
         }
     }
@@ -2496,6 +2509,26 @@ private struct DashboardDualMetricPlot: View {
         }
         let padding = max(0.5, (maximum - minimum) * 0.15)
         return (minimum - padding)...(maximum + padding)
+    }
+
+    private func chargeRange(for values: [Double]) -> ClosedRange<Double> {
+        guard let minimum = values.min(),
+              let maximum = values.max(),
+              minimum.isFinite,
+              maximum.isFinite else {
+            return 0...100
+        }
+
+        let padding = max(2, (maximum - minimum) * 0.15)
+        let lowerBound = max(0, floor((minimum - padding) / 5) * 5)
+        let upperBound = min(100, ceil((maximum + padding) / 5) * 5)
+
+        if upperBound > lowerBound {
+            return lowerBound...upperBound
+        }
+
+        let fallbackPadding = max(5, minimum * 0.05)
+        return max(0, minimum - fallbackPadding)...min(100, maximum + fallbackPadding)
     }
 
     private func scaleMaximum(_ value: Double) -> Double {
