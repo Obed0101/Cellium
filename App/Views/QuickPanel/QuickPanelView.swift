@@ -141,7 +141,7 @@ final class BatteryViewModel: ObservableObject {
         self.defaults = .standard
         self.batteryReader = batteryReader
         self.systemReader = systemReader
-        self.language = CelliumLanguage(rawValue: defaults.string(forKey: "cellium.language") ?? "") ?? .spanish
+        self.language = CelliumLanguage(rawValue: defaults.string(forKey: "cellium.language") ?? "") ?? .english
         self.samplingPreference = SamplingPreference(
             rawValue: defaults.string(forKey: "cellium.samplingPreference") ?? ""
         ) ?? .systemDefault
