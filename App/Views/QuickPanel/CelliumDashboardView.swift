@@ -122,6 +122,8 @@ enum CelliumText {
      case updateCheckFailed
      case updateFailedDetail
      case openRelease
+     case humidity
+     case windSpeed
      case language
     case spanish
     case english
@@ -179,10 +181,10 @@ enum CelliumText {
     case appImpactDetail
     case noAppImpact
     case estimated
-    case rapidDischargeAlert
-    case captureGapAlert
-    case appMemoryAlert
-    case appEnergyAlert
+     case rapidDischargeAlert
+     case appMemoryAlert
+     case appCPUAlert
+     case appEnergyAlert
 }
 
 struct CelliumCopy {
@@ -318,17 +320,19 @@ struct CelliumCopy {
         case .diskFree: return "libre"
         case .noReading: return "sin lectura"
         case .weatherContext: return "Exterior %.1f °C · %@."
+        case .humidity: return "Humedad"
+        case .windSpeed: return "Viento"
         case .cpuAlert: return "CPU alta: %.0f%%. Revisa las tareas activas si el equipo sigue caliente."
         case .memoryAlert: return "RAM alta: %.0f%%. El sistema puede estar comprimiendo memoria."
         case .diskAlert: return "Disco casi lleno: %.0f%% usado. Libera espacio para evitar degradación."
         case .appImpact: return "Apps con más uso"
-        case .appImpactDetail: return "batería/h · CPU/RAM promedio · ventana 1 h"
-        case .noAppImpact: return "Sin señales de apps todavía"
+         case .appImpactDetail: return "batería/h cuando disponible · CPU/RAM promedio · ventana 1 h"
+         case .noAppImpact: return "Esperando lecturas de procesos activos"
         case .estimated: return "estimado"
-        case .rapidDischargeAlert: return "Descarga elevada: ~%.2f%% por minuto. Revisa el impacto de las apps."
-        case .captureGapAlert: return "La última muestra fue hace %d min. Cellium no puede confirmar qué pasó durante ese intervalo."
-        case .appMemoryAlert: return "%@ usa %@ de RAM."
-        case .appEnergyAlert: return "%@: impacto estimado ~%.2f%% de batería por minuto."
+         case .rapidDischargeAlert: return "Descarga elevada: ~%.2f%% por minuto. Revisa el impacto de las apps."
+         case .appMemoryAlert: return "%@ usa %@ de RAM."
+         case .appCPUAlert: return "%@ está usando %.0f%% de CPU."
+         case .appEnergyAlert: return "%@: impacto estimado ~%.2f%% de batería por minuto."
         }
     }
 
@@ -402,6 +406,8 @@ struct CelliumCopy {
          case .updateCheckFailed: return "Check failed"
          case .updateFailedDetail: return "Check your connection and try again."
          case .openRelease: return "View release"
+         case .humidity: return "Humidity"
+         case .windSpeed: return "Wind"
          case .language: return "Language"
 
         case .spanish: return "Español"
@@ -457,13 +463,13 @@ struct CelliumCopy {
         case .memoryAlert: return "High RAM use: %.0f%%. The system may be compressing memory."
         case .diskAlert: return "Disk nearly full: %.0f%% used. Free space to avoid degradation."
         case .appImpact: return "Apps with most use"
-        case .appImpactDetail: return "battery/h · average CPU/RAM · 1h window"
-        case .noAppImpact: return "No app signals yet"
+         case .appImpactDetail: return "battery/h when available · average CPU/RAM · 1h window"
+         case .noAppImpact: return "Waiting for active process readings"
         case .estimated: return "estimated"
-        case .rapidDischargeAlert: return "High drain: ~%.2f%% per minute. Check app impact."
-        case .captureGapAlert: return "The last sample was %d min ago. Cellium cannot confirm what happened during that gap."
-        case .appMemoryAlert: return "%@ is using %@ of RAM."
-        case .appEnergyAlert: return "%@: estimated impact ~%.2f%% battery per minute."
+         case .rapidDischargeAlert: return "High drain: ~%.2f%% per minute. Check app impact."
+         case .appMemoryAlert: return "%@ is using %@ of RAM."
+         case .appCPUAlert: return "%@ is using %.0f%% CPU."
+         case .appEnergyAlert: return "%@: estimated impact ~%.2f%% battery per minute."
         }
     }
 }
@@ -479,7 +485,7 @@ struct CelliumDashboardView: View {
     }
 
     private var appVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.1"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.2"
     }
 
     var body: some View {
@@ -647,7 +653,13 @@ struct CelliumDashboardView: View {
                     Text(weather.locationLabel ?? model.copy(.weather))
                         .font(.system(size: 10, weight: .medium, design: .rounded))
                         .foregroundStyle(CelliumBrand.muted)
-                    Text(String(format: "%.0f%% humedad · %.0f km/h", weather.relativeHumidity, weather.windSpeedKmh))
+                    Text(String(
+                        format: "%@ %.0f%% · %@ %.0f km/h",
+                        model.copy(.humidity),
+                        weather.relativeHumidity,
+                        model.copy(.windSpeed),
+                        weather.windSpeedKmh
+                    ))
                         .font(.system(size: 9, weight: .regular, design: .monospaced))
                         .foregroundStyle(CelliumBrand.muted)
                 }
@@ -680,7 +692,7 @@ struct CelliumDashboardView: View {
                 symbol: "cpu",
                 label: model.copy(.cpu),
                 value: model.system.cpuUsagePercent.map { String(format: "%.0f%%", $0) } ?? "—",
-                detail: model.system.thermalState.rawValue.capitalized
+                detail: model.thermalStateLabel
             )
             CompactSystemMetric(
                 symbol: "memorychip",
@@ -773,7 +785,7 @@ struct CelliumDashboardView: View {
                         .foregroundStyle(CelliumBrand.muted)
                 }
                 Spacer()
-                Picker("Range", selection: Binding(
+                Picker(model.copy(.history), selection: Binding(
                     get: { model.historyRange },
                     set: { model.setHistoryRange($0) }
                 )) {
@@ -1459,7 +1471,7 @@ private struct ProcessImpactItem: View {
     }
 
     private var batteryRateLabel: String {
-        guard let rate = impact.estimatedBatteryPercentPerMinute else { return "— %/h" }
+        guard let rate = impact.estimatedBatteryPercentPerMinute else { return "CPU/RAM" }
         let hourlyRate = max(0, rate * 60)
         if hourlyRate > 0, hourlyRate < 0.1 { return "~<0.1%/h" }
         return String(format: "~%.1f%%/h", hourlyRate)
@@ -1552,6 +1564,38 @@ private struct HistoryLoadingView: View {
     }
 }
 
+private struct DashboardChartTooltip: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+            .foregroundStyle(CelliumBrand.foreground)
+            .lineLimit(2)
+            .minimumScaleFactor(0.8)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 5)
+            .background(CelliumBrand.elevated, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(CelliumBrand.border, lineWidth: 1)
+            }
+            .allowsHitTesting(false)
+    }
+}
+
+private func dashboardTooltipOffset(
+    for index: Int,
+    width: CGFloat,
+    itemWidth: CGFloat,
+    spacing: CGFloat,
+    tooltipWidth: CGFloat
+) -> CGFloat {
+    let center = CGFloat(index) * (itemWidth + spacing) + itemWidth / 2
+    let maximum = max(4, width - tooltipWidth - 4)
+    return max(4, min(maximum, center - tooltipWidth / 2))
+}
+
 private struct DashboardHistoryChart: View {
     let aggregates: [BatteryAggregate]
     let metric: DashboardHistoryMetric
@@ -1575,12 +1619,13 @@ private struct DashboardHistoryChart: View {
     private let maxVisiblePointCount = 120
 
     private var visiblePoints: [(date: Date, value: Double)] {
-        guard points.count > maxVisiblePointCount else { return points }
-        let lastIndex = points.count - 1
+        let allPoints = points
+        guard allPoints.count > maxVisiblePointCount else { return allPoints }
+        let lastIndex = allPoints.count - 1
         let denominator = Double(maxVisiblePointCount - 1)
         return (0..<maxVisiblePointCount).map { index in
             let position = Double(index) / denominator * Double(lastIndex)
-            return points[Int(position.rounded())]
+            return allPoints[Int(position.rounded())]
         }
     }
 
@@ -1942,12 +1987,13 @@ private struct DashboardMetricPlot: View {
     }
 
     private var visiblePoints: [(date: Date, value: Double)] {
-        guard points.count > maxVisiblePointCount else { return points }
-        let lastIndex = points.count - 1
+        let allPoints = points
+        guard allPoints.count > maxVisiblePointCount else { return allPoints }
+        let lastIndex = allPoints.count - 1
         let denominator = Double(maxVisiblePointCount - 1)
         return (0..<maxVisiblePointCount).map { index in
             let position = Double(index) / denominator * Double(lastIndex)
-            return points[Int(position.rounded())]
+            return allPoints[Int(position.rounded())]
         }
     }
 
@@ -2057,7 +2103,9 @@ private struct DashboardMetricPlot: View {
                                         width: barWidth,
                                         height: height
                                     )
-                                    let path = Path(roundedRect: rect, cornerRadius: min(3, barWidth / 2))
+                                    let path = barWidth <= 2
+                                        ? Path(rect)
+                                        : Path(roundedRect: rect, cornerRadius: min(3, barWidth / 2))
                                     let isLatest = index == values.count - 1
                                     let isHovered = hoveredIndex == index
                                     context.fill(
@@ -2218,33 +2266,41 @@ private struct DashboardDualMetricPlot: View {
     }
 
     private var visiblePoints: [PairPoint] {
-        guard points.count > maxVisiblePointCount else { return points }
-        let lastIndex = points.count - 1
+        let allPoints = points
+        guard allPoints.count > maxVisiblePointCount else { return allPoints }
+        let lastIndex = allPoints.count - 1
         let denominator = Double(maxVisiblePointCount - 1)
         return (0..<maxVisiblePointCount).map { index in
             let position = Double(index) / denominator * Double(lastIndex)
-            return points[Int(position.rounded())]
+            return allPoints[Int(position.rounded())]
         }
     }
 
-    private var firstValues: [Double] {
-        visiblePoints.compactMap(\.first)
-    }
-
-    private var secondValues: [Double] {
-        visiblePoints.compactMap(\.second)
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if visiblePoints.isEmpty {
+        let plottedPoints = visiblePoints
+        let plottedFirstValues = plottedPoints.compactMap(\.first)
+        let plottedSecondValues = plottedPoints.compactMap(\.second)
+        let firstMaximum = metricMaximum(for: firstMetric, values: plottedFirstValues)
+        let secondMaximum = secondMetric.map {
+            metricMaximum(for: $0, values: plottedSecondValues)
+        } ?? 1
+        let plottedSecondColor = secondColor
+        let firstTemperatureRange: ClosedRange<Double>? = firstMetric == .temperature
+            ? temperatureRange(for: plottedFirstValues)
+            : nil
+        let secondTemperatureRange: ClosedRange<Double>? = secondMetric == .temperature
+            ? temperatureRange(for: plottedSecondValues)
+            : nil
+
+        return VStack(alignment: .leading, spacing: 4) {
+            if plottedPoints.isEmpty {
                 Text("—")
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(CelliumBrand.muted)
                     .frame(maxWidth: .infinity, minHeight: chartHeight, alignment: .center)
             } else {
                 GeometryReader { proxy in
-                    let count = max(1, visiblePoints.count)
+                    let count = max(1, plottedPoints.count)
                     let spacing: CGFloat = count > 80 ? 1 : min(5, max(2, proxy.size.width / CGFloat(count * 8)))
                     let barWidth = max(1, (proxy.size.width - spacing * CGFloat(max(0, count - 1))) / CGFloat(count))
                     let baselineY = secondMetric == nil ? chartHeight - 3 : chartHeight / 2
@@ -2255,7 +2311,12 @@ private struct DashboardDualMetricPlot: View {
                             let baseline = CGRect(x: 0, y: baselineY, width: size.width, height: 0.8)
                             context.fill(Path(baseline), with: .color(CelliumBrand.border.opacity(0.8)))
 
-                            for (index, point) in visiblePoints.enumerated() {
+                            var firstPath = Path()
+                            var hoveredFirstPath = Path()
+                            var secondPath = Path()
+                            var hoveredSecondPath = Path()
+
+                            for (index, point) in plottedPoints.enumerated() {
                                 let x = CGFloat(index) * (barWidth + spacing)
                                 let isHovered = hoveredIndex == index
 
@@ -2265,7 +2326,8 @@ private struct DashboardDualMetricPlot: View {
                                         availableHeight * barMagnitude(
                                             value,
                                             metric: firstMetric,
-                                            values: firstValues
+                                            maximum: firstMaximum,
+                                            temperatureRange: firstTemperatureRange
                                         )
                                     )
                                     let rect = CGRect(
@@ -2274,19 +2336,24 @@ private struct DashboardDualMetricPlot: View {
                                         width: barWidth,
                                         height: height
                                     )
-                                    context.fill(
-                                        Path(roundedRect: rect, cornerRadius: min(3, barWidth / 2)),
-                                        with: .color(firstColor.opacity(isHovered ? 1 : 0.76))
-                                    )
+                                    let path = barWidth <= 2
+                                        ? Path(rect)
+                                        : Path(roundedRect: rect, cornerRadius: min(3, barWidth / 2))
+                                    if isHovered {
+                                        hoveredFirstPath.addPath(path)
+                                    } else {
+                                        firstPath.addPath(path)
+                                    }
                                 }
 
-                                if let secondMetric, let value = point.second, let secondColor {
+                                if let secondMetric, let value = point.second, plottedSecondColor != nil {
                                     let height = max(
                                         2,
                                         availableHeight * barMagnitude(
                                             value,
                                             metric: secondMetric,
-                                            values: secondValues
+                                            maximum: secondMaximum,
+                                            temperatureRange: secondTemperatureRange
                                         )
                                     )
                                     let rect = CGRect(
@@ -2295,11 +2362,22 @@ private struct DashboardDualMetricPlot: View {
                                         width: barWidth,
                                         height: height
                                     )
-                                    context.fill(
-                                        Path(roundedRect: rect, cornerRadius: min(3, barWidth / 2)),
-                                        with: .color(secondColor.opacity(isHovered ? 1 : 0.76))
-                                    )
+                                    let path = barWidth <= 2
+                                        ? Path(rect)
+                                        : Path(roundedRect: rect, cornerRadius: min(3, barWidth / 2))
+                                    if isHovered {
+                                        hoveredSecondPath.addPath(path)
+                                    } else {
+                                        secondPath.addPath(path)
+                                    }
                                 }
+                            }
+
+                            context.fill(firstPath, with: .color(firstColor.opacity(0.76)))
+                            context.fill(hoveredFirstPath, with: .color(firstColor))
+                            if let plottedSecondColor {
+                                context.fill(secondPath, with: .color(plottedSecondColor.opacity(0.76)))
+                                context.fill(hoveredSecondPath, with: .color(plottedSecondColor))
                             }
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -2308,18 +2386,32 @@ private struct DashboardDualMetricPlot: View {
                             switch phase {
                             case .active(let location):
                                 let index = Int(location.x / max(1, barWidth + spacing))
-                                hoveredIndex = min(visiblePoints.count - 1, max(0, index))
+                                hoveredIndex = min(plottedPoints.count - 1, max(0, index))
                             case .ended:
                                 hoveredIndex = nil
                             }
                         }
 
-                        if let hoveredIndex, visiblePoints.indices.contains(hoveredIndex) {
+                        if let hoveredIndex, plottedPoints.indices.contains(hoveredIndex) {
                             Rectangle()
                                 .fill(CelliumBrand.foreground.opacity(0.5))
                                 .frame(width: 1, height: chartHeight)
                                 .offset(x: CGFloat(hoveredIndex) * (barWidth + spacing) + barWidth / 2)
                                 .allowsHitTesting(false)
+
+                            DashboardChartTooltip(text: hoverHelp(for: plottedPoints))
+                                .frame(width: 230)
+                                .offset(
+                                    x: dashboardTooltipOffset(
+                                        for: hoveredIndex,
+                                        width: proxy.size.width,
+                                        itemWidth: barWidth,
+                                        spacing: spacing,
+                                        tooltipWidth: 230
+                                    ),
+                                    y: -2
+                                )
+                                .zIndex(3)
                         }
                     }
                     .frame(height: chartHeight)
@@ -2337,14 +2429,14 @@ private struct DashboardDualMetricPlot: View {
             .font(.system(size: 8, weight: .regular, design: .monospaced))
             .foregroundStyle(CelliumBrand.muted)
         }
-        .help(hoverHelp)
+        .help(hoverHelp(for: plottedPoints))
     }
 
-    private var hoverHelp: String {
-        guard let hoveredIndex, visiblePoints.indices.contains(hoveredIndex) else {
+    private func hoverHelp(for points: [PairPoint]) -> String {
+        guard let hoveredIndex, points.indices.contains(hoveredIndex) else {
             return firstLabel
         }
-        let point = visiblePoints[hoveredIndex]
+        let point = points[hoveredIndex]
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"
         var values = ["\(formatter.string(from: point.date))"]
@@ -2372,17 +2464,18 @@ private struct DashboardDualMetricPlot: View {
     private func barMagnitude(
         _ value: Double,
         metric: DashboardHistoryMetric,
-        values: [Double]
+        maximum: Double,
+        temperatureRange: ClosedRange<Double>?
     ) -> CGFloat {
         switch metric {
         case .power:
-            return CGFloat(max(0, min(1, abs(value) / max(0.25, metricMaximum(for: metric, values: values)))))
+            return CGFloat(max(0, min(1, abs(value) / max(0.25, maximum))))
         case .temperature:
-            let range = temperatureRange(for: values)
+            guard let range = temperatureRange else { return 0 }
             let normalized = (value - range.lowerBound) / max(0.001, range.upperBound - range.lowerBound)
             return CGFloat(max(0, min(1, normalized)))
         case .charge, .cpu, .memory, .diskRead, .diskWrite:
-            return CGFloat(max(0, min(1, value / max(0.25, metricMaximum(for: metric, values: values)))))
+            return CGFloat(max(0, min(1, value / max(0.25, maximum))))
         }
     }
 

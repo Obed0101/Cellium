@@ -201,6 +201,120 @@ public actor SQLiteStore {
         }
     }
 
+    @discardableResult
+    public func appendProcessSamples(_ samples: [StoredProcessSample]) throws -> Int {
+        guard !samples.isEmpty else { return 0 }
+        guard samples.allSatisfy(Self.isValidProcessSample) else {
+            throw StoreError.invalidData
+        }
+
+        let connection = try requireConnection()
+        do {
+            try Self.execute("BEGIN IMMEDIATE;", connection: connection)
+            let statement = try Self.prepare(
+                "INSERT INTO process_samples (timestamp, payload) VALUES (?, ?);",
+                connection: connection
+            )
+            defer { sqlite3_finalize(statement) }
+
+            for sample in samples {
+                guard sqlite3_bind_double(statement, 1, sample.timestamp.timeIntervalSince1970) == SQLITE_OK else {
+                    throw Self.sqliteError(connection)
+                }
+                let payload = try Self.encode(sample)
+                let bindResult = payload.withCString {
+                    sqlite3_bind_text(statement, 2, $0, -1, Self.sqliteTransient)
+                }
+                guard bindResult == SQLITE_OK,
+                      sqlite3_step(statement) == SQLITE_DONE else {
+                    throw Self.sqliteError(connection)
+                }
+                guard sqlite3_reset(statement) == SQLITE_OK,
+                      sqlite3_clear_bindings(statement) == SQLITE_OK else {
+                    throw Self.sqliteError(connection)
+                }
+            }
+
+            try Self.execute("COMMIT;", connection: connection)
+        } catch {
+            try? Self.execute("ROLLBACK;", connection: connection)
+            throw error
+        }
+        return samples.count
+    }
+
+    public func fetchProcessSamples(
+        since: Date? = nil,
+        limit: Int = 100
+    ) throws -> [StoredProcessSample] {
+        guard limit > 0 else { return [] }
+
+        let connection = try requireConnection()
+        let sql: String
+        if since == nil {
+            sql = """
+            SELECT payload
+            FROM process_samples
+            ORDER BY timestamp DESC, id DESC
+            LIMIT ?;
+            """
+        } else {
+            sql = """
+            SELECT payload
+            FROM process_samples
+            WHERE timestamp >= ?
+            ORDER BY timestamp DESC, id DESC
+            LIMIT ?;
+            """
+        }
+
+        let statement = try Self.prepare(sql, connection: connection)
+        defer { sqlite3_finalize(statement) }
+
+        var bindIndex: Int32 = 1
+        if let since {
+            guard sqlite3_bind_double(statement, bindIndex, since.timeIntervalSince1970) == SQLITE_OK else {
+                throw Self.sqliteError(connection)
+            }
+            bindIndex += 1
+        }
+        guard sqlite3_bind_int(statement, bindIndex, Int32(min(limit, 10_000))) == SQLITE_OK else {
+            throw Self.sqliteError(connection)
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        var samples: [StoredProcessSample] = []
+        while true {
+            switch sqlite3_step(statement) {
+            case SQLITE_ROW:
+                guard let text = sqlite3_column_text(statement, 0) else {
+                    throw StoreError.invalidData
+                }
+                let data = Data(
+                    bytes: text,
+                    count: Int(sqlite3_column_bytes(statement, 0))
+                )
+                do {
+                    samples.append(try decoder.decode(StoredProcessSample.self, from: data))
+                } catch {
+                    throw StoreError.invalidData
+                }
+            case SQLITE_DONE:
+                return samples
+            default:
+                throw Self.sqliteError(connection)
+            }
+        }
+    }
+
+    public func processSampleCount() throws -> Int {
+        try Self.scalarInt(
+            "SELECT COUNT(*) FROM process_samples;",
+            connection: requireConnection()
+        )
+    }
+
     public func fetchAggregates(
         resolution: BatteryAggregateResolution,
         since: Date? = nil,
@@ -306,6 +420,106 @@ public actor SQLiteStore {
             .map { $0 }
     }
 
+    @discardableResult
+    public func appendAlertEvent(_ event: StoredAlertEvent) throws -> Int64 {
+        guard !event.identifier.isEmpty,
+              event.measurements.values.allSatisfy({ $0.isFinite }) else {
+            throw StoreError.invalidData
+        }
+
+        let connection = try requireConnection()
+        let statement = try Self.prepare(
+            "INSERT INTO alert_events (timestamp, payload) VALUES (?, ?);",
+            connection: connection
+        )
+        defer { sqlite3_finalize(statement) }
+
+        guard sqlite3_bind_double(statement, 1, event.occurredAt.timeIntervalSince1970) == SQLITE_OK else {
+            throw Self.sqliteError(connection)
+        }
+        let payload = try Self.encode(event)
+        let bindResult = payload.withCString {
+            sqlite3_bind_text(statement, 2, $0, -1, Self.sqliteTransient)
+        }
+        guard bindResult == SQLITE_OK,
+              sqlite3_step(statement) == SQLITE_DONE else {
+            throw Self.sqliteError(connection)
+        }
+        return sqlite3_last_insert_rowid(connection)
+    }
+
+    public func fetchAlertEvents(
+        since: Date? = nil,
+        limit: Int = 100
+    ) throws -> [StoredAlertEvent] {
+        guard limit > 0 else { return [] }
+
+        let connection = try requireConnection()
+        let sql: String
+        if since == nil {
+            sql = """
+            SELECT payload
+            FROM alert_events
+            ORDER BY timestamp DESC, id DESC
+            LIMIT ?;
+            """
+        } else {
+            sql = """
+            SELECT payload
+            FROM alert_events
+            WHERE timestamp >= ?
+            ORDER BY timestamp DESC, id DESC
+            LIMIT ?;
+            """
+        }
+
+        let statement = try Self.prepare(sql, connection: connection)
+        defer { sqlite3_finalize(statement) }
+
+        var bindIndex: Int32 = 1
+        if let since {
+            guard sqlite3_bind_double(statement, bindIndex, since.timeIntervalSince1970) == SQLITE_OK else {
+                throw Self.sqliteError(connection)
+            }
+            bindIndex += 1
+        }
+        guard sqlite3_bind_int(statement, bindIndex, Int32(min(limit, 10_000))) == SQLITE_OK else {
+            throw Self.sqliteError(connection)
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        var events: [StoredAlertEvent] = []
+        while true {
+            switch sqlite3_step(statement) {
+            case SQLITE_ROW:
+                guard let text = sqlite3_column_text(statement, 0) else {
+                    throw StoreError.invalidData
+                }
+                let data = Data(
+                    bytes: text,
+                    count: Int(sqlite3_column_bytes(statement, 0))
+                )
+                do {
+                    events.append(try decoder.decode(StoredAlertEvent.self, from: data))
+                } catch {
+                    throw StoreError.invalidData
+                }
+            case SQLITE_DONE:
+                return events
+            default:
+                throw Self.sqliteError(connection)
+            }
+        }
+    }
+
+    public func alertCount() throws -> Int {
+        try Self.scalarInt(
+            "SELECT COUNT(*) FROM alert_events;",
+            connection: requireConnection()
+        )
+    }
+
     public func sampleCount() throws -> Int {
         try Self.scalarInt(
             "SELECT COUNT(*) FROM battery_samples_raw;",
@@ -372,6 +586,16 @@ public actor SQLiteStore {
                 connection: connection
             )
             deleted += try Self.deleteSamples(
+                before: now.addingTimeInterval(-Double(configuration.rawRetentionDays) * 86_400),
+                table: "process_samples",
+                connection: connection
+            )
+            deleted += try Self.deleteSamplesExceeding(
+                limit: configuration.rawSampleLimit,
+                table: "process_samples",
+                connection: connection
+            )
+            deleted += try Self.deleteSamples(
                 before: now.addingTimeInterval(-Double(configuration.minuteRetentionDays) * 86_400),
                 table: "battery_samples_minute",
                 connection: connection
@@ -388,6 +612,11 @@ public actor SQLiteStore {
                     connection: connection
                 )
             }
+            deleted += try Self.deleteSamples(
+                before: now.addingTimeInterval(-Double(configuration.alertRetentionDays) * 86_400),
+                table: "alert_events",
+                connection: connection
+            )
             try Self.execute("COMMIT;", connection: connection)
         } catch {
             try? Self.execute("ROLLBACK;", connection: connection)
@@ -491,14 +720,20 @@ _ sql: String, connection: OpaquePointer) throws -> Int {
                 "SELECT COALESCE(MAX(version), 0) FROM schema_migrations;",
                 connection: connection
             )
-            guard currentVersion <= 1 else {
+            guard currentVersion <= 2 else {
                 throw StoreError.unsupportedSchema(version: currentVersion)
             }
-            guard currentVersion < 1 else { return }
 
-            try execute("BEGIN IMMEDIATE;", connection: connection)
-            try execute(
-                """
+            if currentVersion >= 1 {
+                if currentVersion < 2 {
+                    try migrateAlertEvents(connection)
+                }
+                return
+            }
+
+                try execute("BEGIN IMMEDIATE;", connection: connection)
+                try execute(
+                    """
                 CREATE TABLE IF NOT EXISTS battery_samples_raw (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp REAL NOT NULL,
@@ -590,14 +825,15 @@ _ sql: String, connection: OpaquePointer) throws -> Int {
                     payload TEXT NOT NULL
                 );
                 """,
-                connection: connection
-            )
-            try execute(
-                "INSERT INTO schema_migrations (version, applied_at) VALUES (1, ?);",
-                connection: connection,
-                bindDouble: Date().timeIntervalSince1970
-            )
-            try execute("COMMIT;", connection: connection)
+                    connection: connection
+                )
+                try execute(
+                    "INSERT INTO schema_migrations (version, applied_at) VALUES (1, ?);",
+                    connection: connection,
+                    bindDouble: Date().timeIntervalSince1970
+                )
+                try execute("COMMIT;", connection: connection)
+            try migrateAlertEvents(connection)
         } catch {
             try? execute("ROLLBACK;", connection: connection)
             guard let storeError = error as? StoreError else {
@@ -610,6 +846,28 @@ _ sql: String, connection: OpaquePointer) throws -> Int {
                 throw StoreError.migrationFailed
             }
         }
+    }
+
+    private static func migrateAlertEvents(_ connection: OpaquePointer) throws {
+        try execute("BEGIN IMMEDIATE;", connection: connection)
+        try execute(
+            """
+            CREATE TABLE IF NOT EXISTS alert_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                payload TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_alert_events_timestamp
+                ON alert_events(timestamp);
+            """,
+            connection: connection
+        )
+        try execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (2, ?);",
+            connection: connection,
+            bindDouble: Date().timeIntervalSince1970
+        )
+        try execute("COMMIT;", connection: connection)
     }
 
     private static func sessionTable(for kind: BatterySessionKind) -> String {
@@ -1158,6 +1416,27 @@ _ sql: String, connection: OpaquePointer) throws -> Int {
         }
     }
 
+    private static func encode(_ sample: StoredProcessSample) throws -> String {
+        do {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .millisecondsSince1970
+            let data = try encoder.encode(sample)
+            guard let encoded = String(data: data, encoding: .utf8) else {
+                throw StoreError.invalidData
+            }
+            return encoded
+        } catch {
+            throw StoreError.invalidData
+        }
+    }
+
+    private static func isValidProcessSample(_ sample: StoredProcessSample) -> Bool {
+        !sample.name.isEmpty
+            && sample.cpuPercent.isFinite
+            && (sample.memoryPercent?.isFinite ?? true)
+            && (sample.estimatedBatteryPercentPerMinute?.isFinite ?? true)
+    }
+
     private static func encode(_ aggregate: BatteryAggregate) throws -> String {
         do {
             let encoder = JSONEncoder()
@@ -1177,6 +1456,20 @@ _ sql: String, connection: OpaquePointer) throws -> Int {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .millisecondsSince1970
             let data = try encoder.encode(session)
+            guard let encoded = String(data: data, encoding: .utf8) else {
+                throw StoreError.invalidData
+            }
+            return encoded
+        } catch {
+            throw StoreError.invalidData
+        }
+    }
+
+    private static func encode(_ event: StoredAlertEvent) throws -> String {
+        do {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .millisecondsSince1970
+            let data = try encoder.encode(event)
             guard let encoded = String(data: data, encoding: .utf8) else {
                 throw StoreError.invalidData
             }

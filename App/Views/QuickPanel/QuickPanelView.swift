@@ -10,14 +10,39 @@ struct ProactiveAlert: Equatable {
     let identifier: String
     let title: String
     let body: String
+    let severity: AlertSeverity
+    let subject: String?
+    let measurements: [String: Double]
+
+    init(
+        identifier: String,
+        title: String,
+        body: String,
+        severity: AlertSeverity = .warning,
+        subject: String? = nil,
+        measurements: [String: Double] = [:]
+    ) {
+        self.identifier = identifier
+        self.title = title
+        self.body = body
+        self.severity = severity
+        self.subject = subject
+        self.measurements = measurements
+    }
 }
 
 enum HistoryRange: String, CaseIterable, Identifiable {
+    case hour = "1h"
     case twoHours = "2h"
+    case sixHours = "6h"
+    case twelveHours = "12h"
     case day = "24h"
+    case threeDays = "3d"
     case week = "7d"
+    case twoWeeks = "14d"
     case month = "30d"
     case quarter = "90d"
+    case halfYear = "6m"
     case year = "1y"
     case all
 
@@ -25,16 +50,28 @@ enum HistoryRange: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
+        case .hour:
+            return "1 hour"
         case .twoHours:
             return "2 hours"
+        case .sixHours:
+            return "6 hours"
+        case .twelveHours:
+            return "12 hours"
         case .day:
             return "24 hours"
+        case .threeDays:
+            return "3 days"
         case .week:
             return "7 days"
+        case .twoWeeks:
+            return "14 days"
         case .month:
             return "30 days"
         case .quarter:
             return "90 days"
+        case .halfYear:
+            return "6 months"
         case .year:
             return "1 year"
         case .all:
@@ -44,32 +81,66 @@ enum HistoryRange: String, CaseIterable, Identifiable {
 
     var resolution: BatteryAggregateResolution {
         switch self {
-        case .twoHours, .day:
+        case .hour, .twoHours, .sixHours, .twelveHours, .day:
             return .minute
-        case .week, .month:
+        case .threeDays, .week, .twoWeeks, .month:
             return .quarterHour
-        case .quarter, .year, .all:
+        case .quarter, .halfYear, .year, .all:
             return .day
         }
     }
 
-    var since: Date? {
+    var duration: TimeInterval? {
         switch self {
+        case .hour:
+            return 60 * 60
         case .twoHours:
-            return Date().addingTimeInterval(-2 * 3_600)
+            return 2 * 60 * 60
+        case .sixHours:
+            return 6 * 60 * 60
+        case .twelveHours:
+            return 12 * 60 * 60
         case .day:
-            return Date().addingTimeInterval(-24 * 3_600)
+            return 24 * 60 * 60
+        case .threeDays:
+            return 3 * 86_400
         case .week:
-            return Date().addingTimeInterval(-7 * 86_400)
+            return 7 * 86_400
+        case .twoWeeks:
+            return 14 * 86_400
         case .month:
-            return Date().addingTimeInterval(-30 * 86_400)
+            return 30 * 86_400
         case .quarter:
-            return Date().addingTimeInterval(-90 * 86_400)
+            return 90 * 86_400
+        case .halfYear:
+            return 182 * 86_400
         case .year:
-            return Date().addingTimeInterval(-365 * 86_400)
+            return 365 * 86_400
         case .all:
             return nil
         }
+    }
+
+    var since: Date? {
+        duration.map { Date().addingTimeInterval(-$0) }
+    }
+
+    var aggregateFetchLimit: Int {
+        guard let duration else { return 10_000 }
+        let interval: TimeInterval
+        switch resolution {
+        case .minute:
+            interval = 60
+        case .quarterHour:
+            interval = 15 * 60
+        case .day:
+            interval = 86_400
+        }
+        return min(10_000, max(100, Int(ceil(duration / interval)) + 2))
+    }
+
+    var displayPointLimit: Int {
+        240
     }
 }
 
@@ -78,11 +149,19 @@ final class BatteryViewModel: ObservableObject {
     @Published private(set) var battery: BatterySnapshot
     @Published private(set) var system: SystemSnapshot
     @Published private(set) var lastUpdated: Date?
-    @Published private(set) var recentSamples: [StoredBatterySample] = []
+    @Published private(set) var recentSamples: [StoredBatterySample] = [] {
+        didSet {
+            cachedOrderedRecentSamples = makeOrderedRecentSamples(from: recentSamples)
+        }
+    }
     @Published private(set) var recentSessions: [BatterySession] = []
-    @Published private(set) var historyAggregates: [BatteryAggregate] = []
+    @Published private(set) var historyAggregates: [BatteryAggregate] = [] {
+        didSet { cachedHistoryLabels = nil }
+    }
     @Published private(set) var learningAggregates: [BatteryAggregate] = []
-    @Published private(set) var historyRange: HistoryRange = .twoHours
+    @Published private(set) var historyRange: HistoryRange = .twoHours {
+        didSet { cachedHistoryLabels = nil }
+    }
     @Published private(set) var processImpacts: [ProcessEnergyImpact] = []
     @Published private(set) var storeDiagnostics: StoreDiagnostics?
     @Published private(set) var storeError: String?
@@ -91,10 +170,14 @@ final class BatteryViewModel: ObservableObject {
     @Published private(set) var pendingSessionCount = 0
     @Published private(set) var storedSampleCount = 0
     @Published private(set) var learningDaysObserved = 0
-    @Published private(set) var learningFirstDate: Date?
+    @Published private(set) var learningFirstDate: Date? {
+        didSet { cachedHistoryLabels = nil }
+    }
     @Published private(set) var learningLastDate: Date?
     @Published private(set) var showingSettings = false
-    @Published private(set) var language: CelliumLanguage
+    @Published private(set) var language: CelliumLanguage {
+        didSet { cachedHistoryLabels = nil }
+    }
     @Published private(set) var samplingPreference: SamplingPreference
     @Published private(set) var customSamplingIntervalSeconds: Int
     @Published private(set) var learningEnabled: Bool
@@ -128,10 +211,21 @@ final class BatteryViewModel: ObservableObject {
     private var liveRefreshTask: Task<Void, Never>?
     private var panelVisibilityTask: Task<Void, Never>?
     private var backgroundHealthTask: Task<Void, Never>?
+    private var historyLoadTask: Task<Void, Never>?
+    private var historyRequestID = UUID()
     private var lastProcessImpactRefresh: Date?
     private var lastPersistedDataRefresh: Date?
     private var lastHistoryRefresh: Date?
+    private var cachedOrderedRecentSamples: [(date: Date, charge: Int)] = []
+    private var cachedHistoryLabels: HistoryLabels?
     private var lastProactiveAlertKey: String?
+
+    private struct HistoryLabels {
+        let window: String
+        let start: String
+        let middle: String
+        let end: String
+    }
     private var lastProactiveAlertDate: Date?
 
     init(
@@ -141,7 +235,8 @@ final class BatteryViewModel: ObservableObject {
         self.defaults = .standard
         self.batteryReader = batteryReader
         self.systemReader = systemReader
-        self.language = CelliumLanguage(rawValue: defaults.string(forKey: "cellium.language") ?? "") ?? .english
+        let initialLanguage = CelliumLanguage(rawValue: defaults.string(forKey: "cellium.language") ?? "") ?? .english
+        self.language = initialLanguage
         self.samplingPreference = SamplingPreference(
             rawValue: defaults.string(forKey: "cellium.samplingPreference") ?? ""
         ) ?? .systemDefault
@@ -153,6 +248,7 @@ final class BatteryViewModel: ObservableObject {
         self.updateCheckEnabled = defaults.object(forKey: "cellium.updateCheckEnabled") as? Bool ?? false
         self.lastUpdateCheck = defaults.object(forKey: "cellium.lastUpdateCheck") as? Date
         self.weatherCoordinator = WeatherCoordinator()
+        self.weatherCoordinator.setLanguage(initialLanguage)
         self.weatherLocationMode = weatherCoordinator.mode
         self.manualWeatherLabel = weatherCoordinator.manualLabel
         self.manualWeatherLatitude = weatherCoordinator.manualLatitude
@@ -225,7 +321,13 @@ final class BatteryViewModel: ObservableObject {
     }
 
     private var orderedRecentSamples: [(date: Date, charge: Int)] {
-        recentSamples
+        cachedOrderedRecentSamples
+    }
+
+    private func makeOrderedRecentSamples(
+        from samples: [StoredBatterySample]
+    ) -> [(date: Date, charge: Int)] {
+        samples
             .compactMap { sample -> (Date, Int)? in
                 guard let charge = sample.battery.chargePercent else { return nil }
                 return (sample.battery.timestamp, charge)
@@ -288,7 +390,7 @@ final class BatteryViewModel: ObservableObject {
     }
 
     private var installedVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.1"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.2"
     }
 
     var updateReleaseURL: URL? {
@@ -333,56 +435,93 @@ final class BatteryViewModel: ObservableObject {
 
     var historyRangeTitle: String {
         switch (language, historyRange) {
+        case (.spanish, .hour): return "Última hora"
         case (.spanish, .twoHours): return "Últimas 2 horas"
+        case (.spanish, .sixHours): return "Últimas 6 horas"
+        case (.spanish, .twelveHours): return "Últimas 12 horas"
         case (.spanish, .day): return "Últimas 24 horas"
+        case (.spanish, .threeDays): return "Últimos 3 días"
         case (.spanish, .week): return "Últimos 7 días"
+        case (.spanish, .twoWeeks): return "Últimos 14 días"
         case (.spanish, .month): return "Últimos 30 días"
         case (.spanish, .quarter): return "Últimos 90 días"
+        case (.spanish, .halfYear): return "Últimos 6 meses"
         case (.spanish, .year): return "Último año"
         case (.spanish, .all): return "Todo el historial"
+        case (.english, .hour): return "Last hour"
         case (.english, .twoHours): return "Last 2 hours"
+        case (.english, .sixHours): return "Last 6 hours"
+        case (.english, .twelveHours): return "Last 12 hours"
         case (.english, .day): return "Last 24 hours"
+        case (.english, .threeDays): return "Last 3 days"
         case (.english, .week): return "Last 7 days"
+        case (.english, .twoWeeks): return "Last 14 days"
         case (.english, .month): return "Last 30 days"
         case (.english, .quarter): return "Last 90 days"
+        case (.english, .halfYear): return "Last 6 months"
         case (.english, .year): return "Last year"
         case (.english, .all): return "All history"
         }
     }
 
     var historyWindowLabel: String {
-        guard let start = historyStartDate else {
-            return language == .spanish ? "Sin fecha todavía" : "No date yet"
-        }
-        let end = historyEndDate
-        let dayFormatter = DateFormatter()
-        dayFormatter.locale = Locale(identifier: language == .spanish ? "es_ES" : "en_US")
-        dayFormatter.dateFormat = language == .spanish ? "d MMM" : "MMM d"
-        let timeFormatter = DateFormatter()
-        timeFormatter.locale = dayFormatter.locale
-        timeFormatter.dateFormat = "HH:mm"
-
-        if Calendar.current.isDate(start, inSameDayAs: end) {
-            return "\(timeFormatter.string(from: start)) – \(timeFormatter.string(from: end)) · \(dayFormatter.string(from: start))"
-        }
-        let dateTimeFormatter = DateFormatter()
-        dateTimeFormatter.locale = dayFormatter.locale
-        dateTimeFormatter.dateFormat = language == .spanish ? "d MMM HH:mm" : "MMM d HH:mm"
-        return "\(dateTimeFormatter.string(from: start)) – \(dateTimeFormatter.string(from: end))"
+        historyLabels.window
     }
 
     var historyAxisStartLabel: String {
-        historyAxisLabel(for: historyStartDate)
+        historyLabels.start
     }
 
     var historyAxisEndLabel: String {
-        historyAxisLabel(for: historyEndDate)
+        historyLabels.end
     }
 
     var historyAxisMidLabel: String {
-        guard let start = historyStartDate else { return "—" }
-        let midpoint = start.addingTimeInterval(historyEndDate.timeIntervalSince(start) / 2)
-        return historyAxisLabel(for: midpoint)
+        historyLabels.middle
+    }
+
+    private var historyLabels: HistoryLabels {
+        if let cachedHistoryLabels {
+            return cachedHistoryLabels
+        }
+
+        let start = historyStartDate
+        let end = historyEndDate
+        let locale = Locale(identifier: language == .spanish ? "es_ES" : "en_US")
+        let dayFormatter = DateFormatter()
+        dayFormatter.locale = locale
+        dayFormatter.dateFormat = language == .spanish ? "d MMM" : "MMM d"
+        let timeFormatter = DateFormatter()
+        timeFormatter.locale = locale
+        timeFormatter.dateFormat = "HH:mm"
+        let dateTimeFormatter = DateFormatter()
+        dateTimeFormatter.locale = locale
+        dateTimeFormatter.dateFormat = language == .spanish ? "d MMM HH:mm" : "MMM d HH:mm"
+        let axisFormatter = DateFormatter()
+        axisFormatter.locale = locale
+        axisFormatter.dateFormat = Calendar.current.isDate(start ?? end, inSameDayAs: end)
+            ? "HH:mm"
+            : (language == .spanish ? "d MMM HH:mm" : "MMM d HH:mm")
+
+        let window: String
+        if let start {
+            if Calendar.current.isDate(start, inSameDayAs: end) {
+                window = "\(timeFormatter.string(from: start)) – \(timeFormatter.string(from: end)) · \(dayFormatter.string(from: start))"
+            } else {
+                window = "\(dateTimeFormatter.string(from: start)) – \(dateTimeFormatter.string(from: end))"
+            }
+        } else {
+            window = language == .spanish ? "Sin fecha todavía" : "No date yet"
+        }
+
+        let labels = HistoryLabels(
+            window: window,
+            start: start.map(axisFormatter.string(from:)) ?? "—",
+            middle: start.map { axisFormatter.string(from: $0.addingTimeInterval(end.timeIntervalSince($0) / 2)) } ?? "—",
+            end: axisFormatter.string(from: end)
+        )
+        cachedHistoryLabels = labels
+        return labels
     }
 
     private var historyStartDate: Date? {
@@ -391,16 +530,6 @@ final class BatteryViewModel: ObservableObject {
 
     private var historyEndDate: Date {
         historyAggregates.last?.bucketStart ?? Date()
-    }
-
-    private func historyAxisLabel(for date: Date?) -> String {
-        guard let date else { return "—" }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: language == .spanish ? "es_ES" : "en_US")
-        formatter.dateFormat = Calendar.current.isDate(date, inSameDayAs: historyEndDate)
-            ? "HH:mm"
-            : (language == .spanish ? "d MMM HH:mm" : "MMM d HH:mm")
-        return formatter.string(from: date)
     }
 
     var learningDaysLabel: String {
@@ -489,9 +618,6 @@ final class BatteryViewModel: ObservableObject {
         if let dischargeRate = effectiveBatteryPercentPerMinute, dischargeRate >= 0.35 {
             return .attention
         }
-        if samplingGapMinutes != nil {
-            return .attention
-        }
         if let cpu = system.cpuUsagePercent, cpu >= 90 {
             return .attention
         }
@@ -528,9 +654,6 @@ final class BatteryViewModel: ObservableObject {
         if let dischargeRate = effectiveBatteryPercentPerMinute, dischargeRate >= 0.35 {
             return String(format: copy(.rapidDischargeAlert), dischargeRate)
         }
-        if let gapMinutes = samplingGapMinutes {
-            return String(format: copy(.captureGapAlert), gapMinutes)
-        }
         if let temperature = battery.temperatureCelsius, temperature >= temperatureAlertCelsius {
             return String(format: copy(.temperatureAlert), temperature, temperatureAlertCelsius)
         }
@@ -557,6 +680,21 @@ final class BatteryViewModel: ObservableObject {
         if battery.isFullyCharged { return copy(.fullyCharged) }
         if battery.isCharging { return copy(.charging) }
         return copy(.discharging)
+    }
+
+    var thermalStateLabel: String {
+        switch (language, system.thermalState) {
+        case (.spanish, .nominal): return "Normal"
+        case (.spanish, .fair): return "Moderado"
+        case (.spanish, .serious): return "Serio"
+        case (.spanish, .critical): return "Crítico"
+        case (.spanish, .unavailable): return "No disponible"
+        case (.english, .nominal): return "Nominal"
+        case (.english, .fair): return "Fair"
+        case (.english, .serious): return "Serious"
+        case (.english, .critical): return "Critical"
+        case (.english, .unavailable): return "Unavailable"
+        }
     }
 
     var learningProgress: Double {
@@ -623,51 +761,106 @@ final class BatteryViewModel: ObservableObject {
         syncWeatherState()
     }
 
-    func refreshHistory() {
-        guard !isRefreshingHistory else { return }
+    func refreshHistory(includeSupportingData: Bool = true) {
+        historyLoadTask?.cancel()
+        let requestID = UUID()
+        historyRequestID = requestID
+        let requestedRange = historyRange
         lastHistoryRefresh = Date()
         isRefreshingHistory = true
-        Task { @MainActor [weak self] in
-            await self?.loadHistory()
+        historyLoadTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.loadHistory(
+                for: requestedRange,
+                requestID: requestID,
+                includeSupportingData: includeSupportingData
+            )
+            guard self.historyRequestID == requestID else { return }
+            self.historyLoadTask = nil
         }
     }
 
     private func loadHistory() async {
+        await loadHistory(
+            for: historyRange,
+            requestID: nil,
+            includeSupportingData: true
+        )
+    }
+
+    private func loadHistory(
+        for requestedRange: HistoryRange,
+        requestID: UUID?,
+        includeSupportingData: Bool
+    ) async {
         isRefreshingHistory = true
-        defer { isRefreshingHistory = false }
-        samplingMode = await coordinator.currentMode()
-        pendingSampleCount = await coordinator.pendingSampleCount()
-        pendingSessionCount = await coordinator.pendingSessionCount()
+        defer {
+            if requestID == nil || historyRequestID == requestID {
+                isRefreshingHistory = false
+            }
+        }
+
+        func isCurrentRequest() -> Bool {
+            !Task.isCancelled && (requestID == nil || historyRequestID == requestID)
+        }
+
+        if includeSupportingData {
+            samplingMode = await coordinator.currentMode()
+            pendingSampleCount = await coordinator.pendingSampleCount()
+            pendingSessionCount = await coordinator.pendingSessionCount()
+        }
+        guard isCurrentRequest() else { return }
+
         guard let store else {
-            recentSamples = []
-            recentSessions = []
+            if includeSupportingData {
+                recentSamples = []
+                recentSessions = []
+                learningAggregates = []
+                processImpacts = []
+                storeDiagnostics = nil
+                storedSampleCount = 0
+                learningDaysObserved = 0
+                learningFirstDate = nil
+                learningLastDate = nil
+            }
             historyAggregates = []
-            learningAggregates = []
-            processImpacts = []
-            storeDiagnostics = nil
             storeError = "Local storage is unavailable."
-            storedSampleCount = 0
-            learningDaysObserved = 0
-            learningFirstDate = nil
-            learningLastDate = nil
             return
         }
 
         do {
-            try? await coordinator.flush()
-            _ = try? await store.applyRetentionIfNeeded()
-            let sessionSince = Date().addingTimeInterval(-24 * 60 * 60)
+            if includeSupportingData {
+                try? await coordinator.flush()
+                _ = try? await store.applyRetentionIfNeeded()
+                guard isCurrentRequest() else { return }
+            }
+
             let aggregateSamples = try await store.fetchAggregates(
-                resolution: historyRange.resolution,
-                since: historyRange.since,
-                limit: 2_000
+                resolution: requestedRange.resolution,
+                since: requestedRange.since,
+                limit: requestedRange.aggregateFetchLimit
             )
+            guard isCurrentRequest() else { return }
+            let nextHistoryAggregates = downsample(
+                Array(aggregateSamples.reversed()),
+                maxCount: requestedRange.displayPointLimit
+            )
+            if historyAggregates != nextHistoryAggregates {
+                historyAggregates = nextHistoryAggregates
+            }
+            storeError = nil
+
+            guard includeSupportingData else { return }
+
+            let sessionSince = Date().addingTimeInterval(-24 * 60 * 60)
             let learnedSamples = try await store.fetchAggregates(
                 resolution: .day,
                 since: Date().addingTimeInterval(-7 * 86_400),
                 limit: 7
             )
+            guard isCurrentRequest() else { return }
             let evidence = try await store.sampleEvidence()
+            guard isCurrentRequest() else { return }
             storedSampleCount = evidence.sampleCount
             learningDaysObserved = evidence.observedDays
             learningFirstDate = evidence.firstSampleDate
@@ -677,9 +870,11 @@ final class BatteryViewModel: ObservableObject {
                 since: Date().addingTimeInterval(-30 * 60),
                 limit: 60
             )
+            guard isCurrentRequest() else { return }
             let nextRecentSessions = try await store.fetchSessions(since: sessionSince, limit: 5)
-            let nextHistoryAggregates = Array(aggregateSamples.reversed())
+            guard isCurrentRequest() else { return }
             let nextDiagnostics = try await store.diagnostics()
+            guard isCurrentRequest() else { return }
             if learningAggregates != nextLearningAggregates {
                 learningAggregates = nextLearningAggregates
             }
@@ -689,24 +884,25 @@ final class BatteryViewModel: ObservableObject {
             if recentSessions != nextRecentSessions {
                 recentSessions = nextRecentSessions
             }
-            if historyAggregates != nextHistoryAggregates {
-                historyAggregates = nextHistoryAggregates
-            }
             if storeDiagnostics != nextDiagnostics {
                 storeDiagnostics = nextDiagnostics
             }
-            storeError = nil
+        } catch is CancellationError {
+            return
         } catch {
-            recentSamples = []
-            recentSessions = []
+            guard isCurrentRequest() else { return }
+            if includeSupportingData {
+                recentSamples = []
+                recentSessions = []
+                learningAggregates = []
+                processImpacts = []
+                storeDiagnostics = nil
+                storedSampleCount = 0
+                learningDaysObserved = 0
+                learningFirstDate = nil
+                learningLastDate = nil
+            }
             historyAggregates = []
-            learningAggregates = []
-            processImpacts = []
-            storeDiagnostics = nil
-            storedSampleCount = 0
-            learningDaysObserved = 0
-            learningFirstDate = nil
-            learningLastDate = nil
             if let storeError = error as? StoreError {
                 self.storeError = storeError.userMessage
             } else {
@@ -715,10 +911,24 @@ final class BatteryViewModel: ObservableObject {
         }
     }
 
+    private func downsample(
+        _ aggregates: [BatteryAggregate],
+        maxCount: Int
+    ) -> [BatteryAggregate] {
+        guard maxCount > 1, aggregates.count > maxCount else { return aggregates }
+        let lastIndex = aggregates.count - 1
+        let denominator = Double(maxCount - 1)
+        return (0..<maxCount).map { index in
+            let position = Double(index) / denominator * Double(lastIndex)
+            return aggregates[Int(position.rounded())]
+        }
+    }
+
     func setHistoryRange(_ range: HistoryRange) {
+        guard historyRange != range else { return }
         historyRange = range
         if panelVisible {
-            refreshHistory()
+            refreshHistory(includeSupportingData: false)
         }
     }
 
@@ -829,6 +1039,8 @@ final class BatteryViewModel: ObservableObject {
     func setLanguage(_ language: CelliumLanguage) {
         self.language = language
         defaults.set(language.rawValue, forKey: "cellium.language")
+        weatherCoordinator.setLanguage(language)
+        syncWeatherState()
     }
 
     func setSamplingPreference(_ preference: SamplingPreference) {
@@ -1021,6 +1233,22 @@ final class BatteryViewModel: ObservableObject {
             batteryPercentPerMinute: effectiveBatteryPercentPerMinute,
             memoryTotalBytes: system.memoryTotalBytes
         )
+        if let store, !nextImpacts.isEmpty {
+            let samples = nextImpacts.map {
+                StoredProcessSample(
+                    processID: $0.id,
+                    name: $0.name,
+                    timestamp: date,
+                    cpuPercent: $0.averageCPUPercent,
+                    residentMemoryBytes: $0.residentMemoryBytes,
+                    memoryPercent: $0.memoryPercent,
+                    estimatedBatteryPercentPerMinute: $0.estimatedBatteryPercentPerMinute
+                )
+            }
+            Task {
+                try? await store.appendProcessSamples(samples)
+            }
+        }
         if !nextImpacts.isEmpty || processImpacts.isEmpty,
            processImpacts != nextImpacts {
             processImpacts = nextImpacts
@@ -1061,7 +1289,7 @@ final class BatteryViewModel: ObservableObject {
             )
             if panelVisible,
                lastHistoryRefresh == nil || now.timeIntervalSince(lastHistoryRefresh ?? .distantPast) >= 60 {
-                refreshHistory()
+                refreshHistory(includeSupportingData: false)
             }
         } catch {
             // The live snapshot remains available even when the local store is unavailable.
@@ -1079,32 +1307,40 @@ final class BatteryViewModel: ObservableObject {
             candidate = ProactiveAlert(
                 identifier: "memory:\(app.id)",
                 title: language == .spanish ? "RAM alta" : "High memory use",
-                body: String(format: copy(.appMemoryAlert), app.name, memory)
-            )
-        } else if let gapMinutes = samplingGapMinutes {
-            candidate = ProactiveAlert(
-                identifier: "capture-gap",
-                title: language == .spanish ? "Muestra perdida" : "Capture gap",
-                body: String(format: copy(.captureGapAlert), gapMinutes)
+                body: String(format: copy(.appMemoryAlert), app.name, memory),
+                subject: app.name,
+                measurements: processMeasurements(for: app)
             )
         } else if let dischargeRate = effectiveBatteryPercentPerMinute, dischargeRate >= 0.35 {
             candidate = ProactiveAlert(
                 identifier: "discharge",
                 title: language == .spanish ? "Descarga rápida" : "Fast battery drain",
-                body: String(format: copy(.rapidDischargeAlert), dischargeRate)
+                body: String(format: copy(.rapidDischargeAlert), dischargeRate),
+                measurements: ["percentPerMinute": dischargeRate]
             )
         } else if let app = processImpacts.first(where: { ($0.estimatedBatteryPercentPerMinute ?? 0) >= 0.05 }),
                   let rate = app.estimatedBatteryPercentPerMinute {
             candidate = ProactiveAlert(
                 identifier: "energy:\(app.id)",
                 title: language == .spanish ? "Impacto de energía" : "Energy impact",
-                body: String(format: copy(.appEnergyAlert), app.name, rate)
+                body: String(format: copy(.appEnergyAlert), app.name, rate),
+                subject: app.name,
+                measurements: processMeasurements(for: app, energyRate: rate)
+            )
+        } else if let app = processImpacts.first(where: { isHighCPUImpact($0) }) {
+            candidate = ProactiveAlert(
+                identifier: "cpu:\(app.id)",
+                title: language == .spanish ? "CPU alta" : "High app CPU",
+                body: String(format: copy(.appCPUAlert), app.name, app.averageCPUPercent),
+                subject: app.name,
+                measurements: processMeasurements(for: app)
             )
         } else if let memory = system.memoryUsedPercent, memory >= 90 {
             candidate = ProactiveAlert(
                 identifier: "system-memory",
                 title: language == .spanish ? "RAM alta" : "High memory use",
-                body: String(format: copy(.memoryAlert), memory)
+                body: String(format: copy(.memoryAlert), memory),
+                measurements: ["memoryPercent": memory]
             )
         } else {
             candidate = nil
@@ -1124,7 +1360,22 @@ final class BatteryViewModel: ObservableObject {
         }
         lastProactiveAlertKey = candidate.identifier
         lastProactiveAlertDate = now
+        persistAlertEvent(candidate, occurredAt: now)
         onProactiveAlert?(candidate)
+    }
+
+    private func persistAlertEvent(_ alert: ProactiveAlert, occurredAt: Date) {
+        guard let store else { return }
+        let event = StoredAlertEvent(
+            identifier: alert.identifier,
+            occurredAt: occurredAt,
+            severity: alert.severity,
+            subject: alert.subject,
+            measurements: alert.measurements
+        )
+        Task {
+            try? await store.appendAlertEvent(event)
+        }
     }
 
     private func isHighMemoryImpact(_ impact: ProcessEnergyImpact) -> Bool {
@@ -1134,11 +1385,34 @@ final class BatteryViewModel: ObservableObject {
         return (impact.residentMemoryBytes ?? 0) >= 4 * 1_024 * 1_024 * 1_024
     }
 
+    private func isHighCPUImpact(_ impact: ProcessEnergyImpact) -> Bool {
+        impact.averageCPUPercent >= 20
+    }
+
     private func memoryDescription(for impact: ProcessEnergyImpact) -> String {
         if let bytes = impact.residentMemoryBytes {
             return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .memory)
         }
         return language == .spanish ? "mucha" : "high"
+    }
+
+    private func processMeasurements(
+        for impact: ProcessEnergyImpact,
+        energyRate: Double? = nil
+    ) -> [String: Double] {
+        var measurements = ["cpuPercent": impact.averageCPUPercent]
+        if let memoryPercent = impact.memoryPercent {
+            measurements["memoryPercent"] = memoryPercent
+        }
+        if let residentMemoryBytes = impact.residentMemoryBytes {
+            measurements["residentMemoryBytes"] = Double(residentMemoryBytes)
+        }
+        if let energyRate {
+            measurements["percentPerMinute"] = energyRate
+        } else if let estimatedRate = impact.estimatedBatteryPercentPerMinute {
+            measurements["percentPerMinute"] = estimatedRate
+        }
+        return measurements
     }
 
     private func startLiveRefresh() {
@@ -1251,8 +1525,13 @@ final class ProcessEnergyMonitor {
         for usage in usages {
             let processID = usage.application.processIdentifier
             let cpuShare = max(0, min(1, usage.cpuPercent / totalCPU))
-            let estimatedBatteryPercentPerMinute = batteryPercentPerMinute.map {
-                max(0, $0) * cpuShare
+            let estimatedBatteryPercentPerMinute: Double?
+            if usage.cpuPercent > 0 {
+                estimatedBatteryPercentPerMinute = batteryPercentPerMinute.map {
+                    max(0, $0) * cpuShare
+                }
+            } else {
+                estimatedBatteryPercentPerMinute = nil
             }
             var processObservations = observations[processID, default: []]
             processObservations.append(
@@ -1308,6 +1587,11 @@ final class ProcessEnergyMonitor {
             if abs(left.averageCPUPercent - right.averageCPUPercent) > 0.25 {
                 return left.averageCPUPercent > right.averageCPUPercent
             }
+            let leftMemory = left.memoryPercent ?? Double(left.residentMemoryBytes ?? 0)
+            let rightMemory = right.memoryPercent ?? Double(right.residentMemoryBytes ?? 0)
+            if abs(leftMemory - rightMemory) > 0.25 {
+                return leftMemory > rightMemory
+            }
             let leftRank = lastRankOrder[left.id] ?? Int.max
             let rightRank = lastRankOrder[right.id] ?? Int.max
             if leftRank != rightRank {
@@ -1352,7 +1636,11 @@ final class ProcessEnergyMonitor {
         let cpuSeconds = (Double(usage.ri_user_time) + Double(usage.ri_system_time)) / 1_000_000_000
         guard let previous = previousCPUSeconds[processID] else {
             previousCPUSeconds[processID] = (cpuSeconds, date)
-            return nil
+            return ProcessUsage(
+                application: application,
+                cpuPercent: 0,
+                residentMemoryBytes: residentMemoryBytes(for: processID)
+            )
         }
         let elapsed = max(1, date.timeIntervalSince(previous.date))
         let delta = max(0, cpuSeconds - previous.seconds)

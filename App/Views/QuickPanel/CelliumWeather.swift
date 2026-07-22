@@ -56,6 +56,49 @@ enum WeatherLocationMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+private enum WeatherErrorKey {
+    case invalidCoordinates
+    case offline
+    case configureLocation
+    case locationUnavailableWithManualFallback
+    case locationUnavailable
+    case temporaryUnavailable
+    case locationFailed
+
+    func message(for language: CelliumLanguage) -> String {
+        switch (language, self) {
+        case (.spanish, .invalidCoordinates):
+            return "Introduce coordenadas válidas."
+        case (.english, .invalidCoordinates):
+            return "Enter valid coordinates."
+        case (.spanish, .offline):
+            return "Sin conexión para consultar el clima."
+        case (.english, .offline):
+            return "No network connection for weather data."
+        case (.spanish, .configureLocation):
+            return "Configura una ubicación para ver el clima."
+        case (.english, .configureLocation):
+            return "Set a location to see weather."
+        case (.spanish, .locationUnavailableWithManualFallback):
+            return "Ubicación no disponible. Puedes definirla manualmente."
+        case (.english, .locationUnavailableWithManualFallback):
+            return "Location unavailable. You can set it manually."
+        case (.spanish, .locationUnavailable):
+            return "Ubicación no disponible."
+        case (.english, .locationUnavailable):
+            return "Location unavailable."
+        case (.spanish, .temporaryUnavailable):
+            return "Clima temporalmente no disponible."
+        case (.english, .temporaryUnavailable):
+            return "Weather is temporarily unavailable."
+        case (.spanish, .locationFailed):
+            return "No se pudo obtener la ubicación. Puedes definirla manualmente."
+        case (.english, .locationFailed):
+            return "Could not get your location. You can set it manually."
+        }
+    }
+}
+
 @MainActor
 final class WeatherCoordinator: NSObject, @preconcurrency CLLocationManagerDelegate {
     private struct OpenMeteoResponse: Decodable {
@@ -90,7 +133,8 @@ final class WeatherCoordinator: NSObject, @preconcurrency CLLocationManagerDeleg
     private let refreshInterval: TimeInterval = 15 * 60
 
     private(set) var snapshot: WeatherSnapshot?
-    private(set) var errorMessage: String?
+    private var errorKey: WeatherErrorKey?
+    private(set) var language: CelliumLanguage = .english
     private(set) var isRequestingLocation = false
     private(set) var mode: WeatherLocationMode
     private(set) var manualLabel: String
@@ -98,6 +142,10 @@ final class WeatherCoordinator: NSObject, @preconcurrency CLLocationManagerDeleg
     private(set) var manualLongitude: String
 
     var onChange: (() -> Void)?
+
+    var errorMessage: String? {
+        errorKey?.message(for: language)
+    }
 
     override init() {
         self.mode = WeatherLocationMode(
@@ -131,11 +179,29 @@ final class WeatherCoordinator: NSObject, @preconcurrency CLLocationManagerDeleg
         refreshStoredLocation()
     }
 
+    func setLanguage(_ language: CelliumLanguage) {
+        guard self.language != language else { return }
+        self.language = language
+        if let snapshot,
+           snapshot.locationLabel == "Ubicación actual" || snapshot.locationLabel == "Current location" {
+            self.snapshot = WeatherSnapshot(
+                timestamp: snapshot.timestamp,
+                locationLabel: currentLocationLabel,
+                temperatureCelsius: snapshot.temperatureCelsius,
+                apparentTemperatureCelsius: snapshot.apparentTemperatureCelsius,
+                relativeHumidity: snapshot.relativeHumidity,
+                weatherCode: snapshot.weatherCode,
+                windSpeedKmh: snapshot.windSpeedKmh
+            )
+        }
+        onChange?()
+    }
+
     func setMode(_ mode: WeatherLocationMode) {
         self.mode = mode
         defaults.set(mode.rawValue, forKey: "cellium.weather.locationMode")
         snapshot = nil
-        errorMessage = nil
+        errorKey = nil
         if mode == .manual {
             locationManager.stopUpdatingLocation()
             refreshStoredLocation()
@@ -150,7 +216,7 @@ final class WeatherCoordinator: NSObject, @preconcurrency CLLocationManagerDeleg
               let longitudeValue = Double(longitude),
               (-90...90).contains(latitudeValue),
               (-180...180).contains(longitudeValue) else {
-            errorMessage = "Introduce coordenadas válidas."
+            errorKey = .invalidCoordinates
             onChange?()
             return
         }
@@ -181,7 +247,7 @@ final class WeatherCoordinator: NSObject, @preconcurrency CLLocationManagerDeleg
             return
         }
         guard isNetworkAvailable else {
-            errorMessage = "Sin conexión para consultar el clima."
+            errorKey = .offline
             onChange?()
             return
         }
@@ -201,7 +267,7 @@ final class WeatherCoordinator: NSObject, @preconcurrency CLLocationManagerDeleg
             fetchWeather(
                 latitude: coordinate.latitude,
                 longitude: coordinate.longitude,
-                label: defaults.string(forKey: "cellium.weather.locationLabel")
+                label: localizedStoredLocationLabel(defaults.string(forKey: "cellium.weather.locationLabel"))
             )
             return
         }
@@ -212,7 +278,7 @@ final class WeatherCoordinator: NSObject, @preconcurrency CLLocationManagerDeleg
     private func requestLocationIfNeeded(force: Bool) {
         guard mode == .automaticOnce else { return }
         guard force || !defaults.bool(forKey: "cellium.weather.locationRequested") else {
-            errorMessage = "Configura una ubicación para ver el clima."
+            errorKey = .configureLocation
             onChange?()
             return
         }
@@ -229,10 +295,10 @@ final class WeatherCoordinator: NSObject, @preconcurrency CLLocationManagerDeleg
             locationManager.requestWhenInUseAuthorization()
             onChange?()
         case .denied, .restricted:
-            errorMessage = "Ubicación no disponible. Puedes definirla manualmente."
+            errorKey = .locationUnavailableWithManualFallback
             onChange?()
         @unknown default:
-            errorMessage = "Ubicación no disponible."
+            errorKey = .locationUnavailable
             onChange?()
         }
     }
@@ -265,13 +331,13 @@ final class WeatherCoordinator: NSObject, @preconcurrency CLLocationManagerDeleg
                     weatherCode: decoded.current.weatherCode,
                     windSpeedKmh: decoded.current.windSpeedKmh
                 )
-                self.errorMessage = nil
+                self.errorKey = nil
                 self.isRequestingLocation = false
                 self.onChange?()
             } catch is CancellationError {
                 return
             } catch {
-                self.errorMessage = "Clima temporalmente no disponible."
+                self.errorKey = .temporaryUnavailable
                 self.isRequestingLocation = false
                 self.onChange?()
             }
@@ -291,7 +357,7 @@ final class WeatherCoordinator: NSObject, @preconcurrency CLLocationManagerDeleg
             requestLocationIfNeeded(force: true)
         } else if manager.authorizationStatus == .denied || manager.authorizationStatus == .restricted {
             isRequestingLocation = false
-            errorMessage = "Ubicación no disponible. Puedes definirla manualmente."
+            errorKey = .locationUnavailableWithManualFallback
             onChange?()
         }
     }
@@ -302,18 +368,30 @@ final class WeatherCoordinator: NSObject, @preconcurrency CLLocationManagerDeleg
         isRequestingLocation = false
         defaults.set(location.coordinate.latitude, forKey: "cellium.weather.latitude")
         defaults.set(location.coordinate.longitude, forKey: "cellium.weather.longitude")
-        defaults.set("Ubicación actual", forKey: "cellium.weather.locationLabel")
+        defaults.set(currentLocationLabel, forKey: "cellium.weather.locationLabel")
         fetchWeather(
             latitude: location.coordinate.latitude,
             longitude: location.coordinate.longitude,
-            label: "Ubicación actual"
+            label: currentLocationLabel
         )
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         manager.stopUpdatingLocation()
         isRequestingLocation = false
-        errorMessage = "No se pudo obtener la ubicación. Puedes definirla manualmente."
+        errorKey = .locationFailed
         onChange?()
+    }
+
+    private var currentLocationLabel: String {
+        language == .spanish ? "Ubicación actual" : "Current location"
+    }
+
+    private func localizedStoredLocationLabel(_ label: String?) -> String? {
+        guard let label, !label.isEmpty else { return nil }
+        if label == "Ubicación actual" || label == "Current location" {
+            return currentLocationLabel
+        }
+        return label
     }
 }
