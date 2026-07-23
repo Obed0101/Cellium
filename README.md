@@ -133,7 +133,7 @@ Build the standard macOS drag-to-Applications installer locally:
 
 ```bash
 ./Scripts/build-dmg.sh
-open Distribution/Cellium-0.1.4.dmg
+open Distribution/Cellium-0.1.8.dmg
 ```
 
 The disk image contains `Cellium.app` and an `Applications` shortcut. Free builds use a valid ad-hoc bundle signature; they are not Apple-notarized and may require **System Settings → Privacy & Security → Open Anyway** on first launch. See [distribution](Documentation/DISTRIBUTION.md) for Developer ID signing and notarization details.

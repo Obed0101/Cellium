@@ -11,7 +11,7 @@ final class SQLiteStoreTests: XCTestCase {
         let sampleCount = try await store.sampleCount()
         let alertCount = try await store.alertCount()
 
-        XCTAssertEqual(schemaVersion, 2)
+        XCTAssertEqual(schemaVersion, 3)
         XCTAssertEqual(sampleCount, 0)
         XCTAssertEqual(alertCount, 0)
         XCTAssertTrue(FileManager.default.fileExists(atPath: store.databaseURL.path))
@@ -187,6 +187,28 @@ final class SQLiteStoreTests: XCTestCase {
         XCTAssertEqual(emptyResult, [])
     }
 
+    func testFetchAggregatesFiltersByTimestampBounds() async throws {
+        let store = try makeStore()
+        let start = Date(timeIntervalSince1970: 1_700_000_040)
+
+        _ = try await store.appendBatch([
+            StoredBatterySample(battery: makeBattery(at: start, charge: 80)),
+            StoredBatterySample(battery: makeBattery(at: start.addingTimeInterval(60), charge: 79)),
+            StoredBatterySample(battery: makeBattery(at: start.addingTimeInterval(120), charge: 78))
+        ])
+
+        let bounded = try await store.fetchAggregates(
+            resolution: .minute,
+            since: start.addingTimeInterval(60),
+            until: start.addingTimeInterval(120),
+            limit: 10
+        )
+
+        XCTAssertEqual(bounded.count, 1)
+        XCTAssertEqual(bounded[0].bucketStart, start.addingTimeInterval(60))
+        XCTAssertEqual(bounded[0].averageChargePercent ?? -1, 79, accuracy: 0.001)
+    }
+
     func testPersistsProcessSamplesNewestFirst() async throws {
         let store = try makeStore()
         let firstDate = Date(timeIntervalSince1970: 1_700_000_000)
@@ -194,6 +216,7 @@ final class SQLiteStoreTests: XCTestCase {
         let first = StoredProcessSample(
             processID: 10,
             name: "First App",
+            kind: .application,
             timestamp: firstDate,
             cpuPercent: 12.5,
             residentMemoryBytes: 128 * 1_024 * 1_024,
@@ -203,6 +226,7 @@ final class SQLiteStoreTests: XCTestCase {
         let second = StoredProcessSample(
             processID: 20,
             name: "Second App",
+            kind: .daemon,
             timestamp: secondDate,
             cpuPercent: 32,
             residentMemoryBytes: 256 * 1_024 * 1_024,
@@ -219,6 +243,25 @@ final class SQLiteStoreTests: XCTestCase {
         XCTAssertEqual(samples, [second, first])
         XCTAssertEqual(filtered, [second])
         XCTAssertEqual(count, 2)
+    }
+
+    func testLegacyProcessSamplesDecodeWithoutKind() throws {
+        let sample = StoredProcessSample(
+            processID: 10,
+            name: "Legacy App",
+            kind: .application,
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000),
+            cpuPercent: 12.5
+        )
+        let encoded = try JSONEncoder().encode(sample)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object.removeValue(forKey: "kind")
+        let legacyData = try JSONSerialization.data(withJSONObject: object)
+
+        let decoded = try JSONDecoder().decode(StoredProcessSample.self, from: legacyData)
+
+        XCTAssertEqual(decoded.kind, .process)
+        XCTAssertEqual(decoded.name, "Legacy App")
     }
 
     func testPersistsAlertEventsNewestFirst() async throws {
@@ -247,6 +290,23 @@ final class SQLiteStoreTests: XCTestCase {
         XCTAssertEqual(events, [second, first])
         XCTAssertEqual(alertCount, 2)
         XCTAssertEqual(filteredEvents, [second])
+    }
+
+    func testClearAlertEventsRemovesPersistedAlerts() async throws {
+        let store = try makeStore()
+        _ = try await store.appendAlertEvent(
+            StoredAlertEvent(identifier: "first", occurredAt: Date())
+        )
+        _ = try await store.appendAlertEvent(
+            StoredAlertEvent(identifier: "second", occurredAt: Date())
+        )
+
+        try await store.clearAlertEvents()
+
+        let events = try await store.fetchAlertEvents()
+        let count = try await store.alertCount()
+        XCTAssertTrue(events.isEmpty)
+        XCTAssertEqual(count, 0)
     }
 
     func testRejectsInvalidAlertMeasurements() async throws {
@@ -438,7 +498,7 @@ final class SQLiteStoreTests: XCTestCase {
 
         let diagnostics = try await store.diagnostics()
 
-        XCTAssertEqual(diagnostics.schemaVersion, 2)
+        XCTAssertEqual(diagnostics.schemaVersion, 3)
         XCTAssertGreaterThan(diagnostics.databaseSizeBytes, 0)
         XCTAssertGreaterThanOrEqual(diagnostics.walSizeBytes, 0)
     }
@@ -470,12 +530,52 @@ final class SQLiteStoreTests: XCTestCase {
 
         let store = try SQLiteStore(databaseURL: databaseURL)
         let schemaVersion = try await store.schemaVersion()
-        XCTAssertEqual(schemaVersion, 2)
+        XCTAssertEqual(schemaVersion, 3)
         _ = try await store.appendAlertEvent(
             StoredAlertEvent(identifier: "migrated", occurredAt: Date())
         )
         let alertCount = try await store.alertCount()
         XCTAssertEqual(alertCount, 1)
+    }
+
+    func testPersistsAndUpdatesIntelligenceAnalysisLogs() async throws {
+        let store = try makeStore()
+        let requestedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let running = StoredIntelligenceAnalysis(
+            requestedAt: requestedAt,
+            kind: .analysis,
+            provider: "openRouter",
+            model: "test/model",
+            languageCode: "es",
+            prompt: "[system]\nResponde en español",
+            status: .running
+        )
+
+        _ = try await store.appendIntelligenceAnalysis(running)
+        let completed = StoredIntelligenceAnalysis(
+            id: running.id,
+            requestedAt: requestedAt,
+            completedAt: requestedAt.addingTimeInterval(4),
+            kind: .analysis,
+            provider: "openRouter",
+            model: "test/model",
+            languageCode: "es",
+            prompt: running.prompt,
+            response: "La batería está estable.",
+            status: .succeeded,
+            title: "Batería estable",
+            severity: "info",
+            confidence: "medium",
+            evidence: ["Nivel medido: 80%"],
+            recommendations: ["Continúa observando la tendencia."]
+        )
+
+        try await store.updateIntelligenceAnalysis(completed)
+        let logs = try await store.fetchIntelligenceAnalyses()
+        let analysisCount = try await store.intelligenceAnalysisCount()
+        XCTAssertEqual(logs.count, 1)
+        XCTAssertEqual(logs.first, completed)
+        XCTAssertEqual(analysisCount, 1)
     }
 
     func testRejectsCorruptDatabaseWithDiagnosticError() throws {
@@ -506,12 +606,12 @@ final class SQLiteStoreTests: XCTestCase {
 
         let schemaSQL = """
         CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at REAL NOT NULL);
-        INSERT INTO schema_migrations (version, applied_at) VALUES (3, 0);
+        INSERT INTO schema_migrations (version, applied_at) VALUES (4, 0);
         """
         XCTAssertEqual(sqlite3_exec(connection, schemaSQL, nil, nil, nil), SQLITE_OK)
 
         XCTAssertThrowsError(try SQLiteStore(databaseURL: databaseURL)) { error in
-            XCTAssertEqual(error as? StoreError, .unsupportedSchema(version: 3))
+            XCTAssertEqual(error as? StoreError, .unsupportedSchema(version: 4))
         }
     }
 

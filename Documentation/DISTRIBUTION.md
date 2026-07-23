@@ -11,7 +11,7 @@ Run it from the repository root:
 
 ```bash
 ./Scripts/build-dmg.sh
-open Distribution/Cellium-0.1.4.dmg
+open Distribution/Cellium-0.1.8.dmg
 ```
 
 The script targets Apple Silicon by default and signs the complete app bundle ad hoc for local/free distribution. This produces a valid bundle, but it is **not Apple-verified or notarized**. On the first launch, macOS may require **System Settings → Privacy & Security → Open Anyway**.

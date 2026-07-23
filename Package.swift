@@ -11,6 +11,7 @@ let package = Package(
         .library(name: "CelliumCore", targets: ["CelliumCore"]),
         .library(name: "CelliumDarwin", targets: ["CelliumDarwin"]),
         .library(name: "CelliumStore", targets: ["CelliumStore"]),
+        .library(name: "CelliumIntelligence", targets: ["CelliumIntelligence"]),
         .library(name: "CelliumAutomation", targets: ["CelliumAutomation"]),
         .executable(name: "cellium", targets: ["CelliumCLI"]),
         .executable(name: "CelliumApp", targets: ["CelliumApp"])
@@ -50,7 +51,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "CelliumApp",
-            dependencies: ["CelliumCore", "CelliumDarwin", "CelliumStore", "CelliumAutomation"],
+            dependencies: ["CelliumCore", "CelliumDarwin", "CelliumStore", "CelliumAutomation", "CelliumIntelligence"],
             path: "App",
             exclude: ["Info.plist"],
             resources: [
@@ -71,6 +72,11 @@ let package = Package(
             name: "CelliumStoreTests",
             dependencies: ["CelliumCore", "CelliumStore"],
             path: "Tests/CelliumStoreTests"
+        ),
+        .testTarget(
+            name: "CelliumIntelligenceTests",
+            dependencies: ["CelliumCore", "CelliumIntelligence"],
+            path: "Tests/CelliumIntelligenceTests"
         )
     ]
 )

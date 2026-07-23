@@ -318,6 +318,7 @@ public actor SQLiteStore {
     public func fetchAggregates(
         resolution: BatteryAggregateResolution,
         since: Date? = nil,
+        until: Date? = nil,
         limit: Int = 100
     ) throws -> [BatteryAggregate] {
         guard limit > 0 else { return [] }
@@ -325,18 +326,35 @@ public actor SQLiteStore {
         let connection = try requireConnection()
         let table = Self.aggregateTable(for: resolution)
         let sql: String
-        if since == nil {
+        switch (since, until) {
+        case (nil, nil):
             sql = """
             SELECT payload
             FROM \(table)
             ORDER BY timestamp DESC, id DESC
             LIMIT ?;
             """
-        } else {
+        case (.some, nil):
             sql = """
             SELECT payload
             FROM \(table)
             WHERE timestamp >= ?
+            ORDER BY timestamp DESC, id DESC
+            LIMIT ?;
+            """
+        case (nil, .some):
+            sql = """
+            SELECT payload
+            FROM \(table)
+            WHERE timestamp < ?
+            ORDER BY timestamp DESC, id DESC
+            LIMIT ?;
+            """
+        case (.some, .some):
+            sql = """
+            SELECT payload
+            FROM \(table)
+            WHERE timestamp >= ? AND timestamp < ?
             ORDER BY timestamp DESC, id DESC
             LIMIT ?;
             """
@@ -348,6 +366,12 @@ public actor SQLiteStore {
         var bindIndex: Int32 = 1
         if let since {
             guard sqlite3_bind_double(statement, bindIndex, since.timeIntervalSince1970) == SQLITE_OK else {
+                throw Self.sqliteError(connection)
+            }
+            bindIndex += 1
+        }
+        if let until {
+            guard sqlite3_bind_double(statement, bindIndex, until.timeIntervalSince1970) == SQLITE_OK else {
                 throw Self.sqliteError(connection)
             }
             bindIndex += 1
@@ -513,6 +537,159 @@ public actor SQLiteStore {
         }
     }
 
+    public func clearAlertEvents() throws {
+        let connection = try requireConnection()
+        let statement = try Self.prepare(
+            "DELETE FROM alert_events;",
+            connection: connection
+        )
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw Self.sqliteError(connection)
+        }
+    }
+
+    @discardableResult
+    public func appendIntelligenceAnalysis(_ analysis: StoredIntelligenceAnalysis) throws -> Int64 {
+        guard !analysis.prompt.isEmpty else {
+            throw StoreError.invalidData
+        }
+
+        let connection = try requireConnection()
+        let statement = try Self.prepare(
+            "INSERT INTO intelligence_analysis_logs (run_id, timestamp, payload) VALUES (?, ?, ?);",
+            connection: connection
+        )
+        defer { sqlite3_finalize(statement) }
+
+        let runID = analysis.id.uuidString
+        let runIDResult = runID.withCString {
+            sqlite3_bind_text(statement, 1, $0, -1, Self.sqliteTransient)
+        }
+        guard runIDResult == SQLITE_OK,
+              sqlite3_bind_double(statement, 2, analysis.requestedAt.timeIntervalSince1970) == SQLITE_OK else {
+            throw Self.sqliteError(connection)
+        }
+        let payload = try Self.encode(analysis)
+        let bindResult = payload.withCString {
+            sqlite3_bind_text(statement, 3, $0, -1, Self.sqliteTransient)
+        }
+        guard bindResult == SQLITE_OK,
+              sqlite3_step(statement) == SQLITE_DONE else {
+            throw Self.sqliteError(connection)
+        }
+        return sqlite3_last_insert_rowid(connection)
+    }
+
+    public func updateIntelligenceAnalysis(_ analysis: StoredIntelligenceAnalysis) throws {
+        guard !analysis.prompt.isEmpty else {
+            throw StoreError.invalidData
+        }
+
+        let connection = try requireConnection()
+        let statement = try Self.prepare(
+            """
+            INSERT INTO intelligence_analysis_logs (run_id, timestamp, payload)
+            VALUES (?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET
+                timestamp = excluded.timestamp,
+                payload = excluded.payload;
+            """,
+            connection: connection
+        )
+        defer { sqlite3_finalize(statement) }
+
+        let runID = analysis.id.uuidString
+        let runIDResult = runID.withCString {
+            sqlite3_bind_text(statement, 1, $0, -1, Self.sqliteTransient)
+        }
+        guard runIDResult == SQLITE_OK,
+              sqlite3_bind_double(statement, 2, (analysis.completedAt ?? analysis.requestedAt).timeIntervalSince1970) == SQLITE_OK else {
+            throw Self.sqliteError(connection)
+        }
+        let payload = try Self.encode(analysis)
+        let payloadResult = payload.withCString {
+            sqlite3_bind_text(statement, 3, $0, -1, Self.sqliteTransient)
+        }
+        guard payloadResult == SQLITE_OK,
+              runIDResult == SQLITE_OK,
+              sqlite3_step(statement) == SQLITE_DONE else {
+            throw Self.sqliteError(connection)
+        }
+        guard sqlite3_changes(connection) == 1 else {
+            throw StoreError.invalidData
+        }
+    }
+
+    public func fetchIntelligenceAnalyses(
+        since: Date? = nil,
+        limit: Int = 100
+    ) throws -> [StoredIntelligenceAnalysis] {
+        guard limit > 0 else { return [] }
+
+        let connection = try requireConnection()
+        let sql: String
+        if since == nil {
+            sql = """
+            SELECT payload
+            FROM intelligence_analysis_logs
+            ORDER BY timestamp DESC, id DESC
+            LIMIT ?;
+            """
+        } else {
+            sql = """
+            SELECT payload
+            FROM intelligence_analysis_logs
+            WHERE timestamp >= ?
+            ORDER BY timestamp DESC, id DESC
+            LIMIT ?;
+            """
+        }
+
+        let statement = try Self.prepare(sql, connection: connection)
+        defer { sqlite3_finalize(statement) }
+
+        var bindIndex: Int32 = 1
+        if let since {
+            guard sqlite3_bind_double(statement, bindIndex, since.timeIntervalSince1970) == SQLITE_OK else {
+                throw Self.sqliteError(connection)
+            }
+            bindIndex += 1
+        }
+        guard sqlite3_bind_int(statement, bindIndex, Int32(min(limit, 10_000))) == SQLITE_OK else {
+            throw Self.sqliteError(connection)
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        var analyses: [StoredIntelligenceAnalysis] = []
+        while true {
+            switch sqlite3_step(statement) {
+            case SQLITE_ROW:
+                guard let text = sqlite3_column_text(statement, 0) else {
+                    throw StoreError.invalidData
+                }
+                let data = Data(bytes: text, count: Int(sqlite3_column_bytes(statement, 0)))
+                do {
+                    analyses.append(try decoder.decode(StoredIntelligenceAnalysis.self, from: data))
+                } catch {
+                    throw StoreError.invalidData
+                }
+            case SQLITE_DONE:
+                return analyses
+            default:
+                throw Self.sqliteError(connection)
+            }
+        }
+    }
+
+    public func intelligenceAnalysisCount() throws -> Int {
+        try Self.scalarInt(
+            "SELECT COUNT(*) FROM intelligence_analysis_logs;",
+            connection: requireConnection()
+        )
+    }
+
     public func alertCount() throws -> Int {
         try Self.scalarInt(
             "SELECT COUNT(*) FROM alert_events;",
@@ -615,6 +792,11 @@ public actor SQLiteStore {
             deleted += try Self.deleteSamples(
                 before: now.addingTimeInterval(-Double(configuration.alertRetentionDays) * 86_400),
                 table: "alert_events",
+                connection: connection
+            )
+            deleted += try Self.deleteSamples(
+                before: now.addingTimeInterval(-Double(configuration.intelligenceAnalysisRetentionDays) * 86_400),
+                table: "intelligence_analysis_logs",
                 connection: connection
             )
             try Self.execute("COMMIT;", connection: connection)
@@ -720,13 +902,16 @@ _ sql: String, connection: OpaquePointer) throws -> Int {
                 "SELECT COALESCE(MAX(version), 0) FROM schema_migrations;",
                 connection: connection
             )
-            guard currentVersion <= 2 else {
+            guard currentVersion <= 3 else {
                 throw StoreError.unsupportedSchema(version: currentVersion)
             }
 
             if currentVersion >= 1 {
                 if currentVersion < 2 {
                     try migrateAlertEvents(connection)
+                }
+                if currentVersion < 3 {
+                    try migrateIntelligenceAnalyses(connection)
                 }
                 return
             }
@@ -834,6 +1019,7 @@ _ sql: String, connection: OpaquePointer) throws -> Int {
                 )
                 try execute("COMMIT;", connection: connection)
             try migrateAlertEvents(connection)
+            try migrateIntelligenceAnalyses(connection)
         } catch {
             try? execute("ROLLBACK;", connection: connection)
             guard let storeError = error as? StoreError else {
@@ -864,6 +1050,29 @@ _ sql: String, connection: OpaquePointer) throws -> Int {
         )
         try execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (2, ?);",
+            connection: connection,
+            bindDouble: Date().timeIntervalSince1970
+        )
+        try execute("COMMIT;", connection: connection)
+    }
+
+    private static func migrateIntelligenceAnalyses(_ connection: OpaquePointer) throws {
+        try execute("BEGIN IMMEDIATE;", connection: connection)
+        try execute(
+            """
+            CREATE TABLE IF NOT EXISTS intelligence_analysis_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL UNIQUE,
+                timestamp REAL NOT NULL,
+                payload TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_intelligence_analysis_logs_timestamp
+                ON intelligence_analysis_logs(timestamp);
+            """,
+            connection: connection
+        )
+        try execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (3, ?);",
             connection: connection,
             bindDouble: Date().timeIntervalSince1970
         )
@@ -1474,6 +1683,22 @@ _ sql: String, connection: OpaquePointer) throws -> Int {
                 throw StoreError.invalidData
             }
             return encoded
+        } catch {
+            throw StoreError.invalidData
+        }
+    }
+
+    private static func encode(_ analysis: StoredIntelligenceAnalysis) throws -> String {
+        do {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .millisecondsSince1970
+            let data = try encoder.encode(analysis)
+            guard let encoded = String(data: data, encoding: .utf8) else {
+                throw StoreError.invalidData
+            }
+            return encoded
+        } catch let error as StoreError {
+            throw error
         } catch {
             throw StoreError.invalidData
         }
