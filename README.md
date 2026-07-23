@@ -34,15 +34,15 @@ Cellium answers the practical battery questions first:
 
 The dashboard is designed to make the important state visible immediately: battery percentage, active cells, temperature, power source, health, cycles, system load and historical trends.
 
-<table>
+<table align="center">
   <tr>
     <td align="center" width="50%">
-      <img src="Documentation/images/cellium-showcase-2.png" alt="Clean Cellium dashboard with battery alert and history" width="360">
+      <img src="Documentation/images/cellium-showcase-2.png" alt="Clean Cellium dashboard with battery alert and history" width="360" style="border-radius: 18px; border: 1px solid #334047;">
       <br>
       <sub>Current state, alerts and battery history</sub>
     </td>
     <td align="center" width="50%">
-      <img src="Documentation/images/cellium-showcase-3.png" alt="Cellium charts, app impact and local learning" width="360">
+      <img src="Documentation/images/cellium-showcase-3.png" alt="Cellium charts, app impact and local learning" width="360" style="border-radius: 18px; border: 1px solid #334047;">
       <br>
       <sub>System trends, app impact and local learning</sub>
     </td>
@@ -133,10 +133,10 @@ Build the standard macOS drag-to-Applications installer locally:
 
 ```bash
 ./Scripts/build-dmg.sh
-open Distribution/Cellium-0.1.2.dmg
+open Distribution/Cellium-0.1.4.dmg
 ```
 
-The disk image contains `Cellium.app` and an `Applications` shortcut. Local builds are unsigned by default; Developer ID signing and notarization can be supplied through the script environment when release credentials are available.
+The disk image contains `Cellium.app` and an `Applications` shortcut. Free builds use a valid ad-hoc bundle signature; they are not Apple-notarized and may require **System Settings → Privacy & Security → Open Anyway** on first launch. See [distribution](Documentation/DISTRIBUTION.md) for Developer ID signing and notarization details.
 
 ## Updates
 
