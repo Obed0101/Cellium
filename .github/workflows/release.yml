@@ -27,6 +27,12 @@ jobs:
           ref: ${{ env.RELEASE_TAG }}
 
       - name: Build drag-to-Applications DMG
+        env:
+          ARCHS: arm64
+          SIGNING_MODE: adhoc
+          CODE_SIGNING_ALLOWED: NO
+          CODE_SIGNING_REQUIRED: NO
+          CODE_SIGN_IDENTITY: "-"
         run: ./Scripts/build-dmg.sh
 
       - name: Ensure GitHub release exists
