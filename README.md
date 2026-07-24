@@ -1,9 +1,9 @@
 <div align="center">
-  <img src="Branding/Cellium_Branding_Assets/07_Backgrounds/Cellium_Hero_01_1920x1080.png" alt="Cellium emerald signal banner" width="960">
+  <img src="Branding/Cellium_Branding_Assets/07_Backgrounds/Cellium_Hero_01_1920x1080.png" alt="Cellium signal banner" width="960">
 
   <h1>Cellium</h1>
 
-  <p><strong>See why your Mac battery changes, understand what consumes it, and decide what to do next.</strong></p>
+  <p><strong>A local-first macOS battery observatory with history, alerts, learning and an evidence-aware AI assistant.</strong></p>
 
   <p>
     <a href="https://github.com/Obed0101/Cellium/releases/latest">Download the latest release</a>
@@ -14,104 +14,158 @@
   </p>
 </div>
 
-Cellium is a native macOS menu bar app for people who want useful battery and power data without a cloud dashboard. It reads the signals macOS actually exposes, keeps history locally, and turns them into a calm view of battery state, power draw, system load and usage patterns.
+Cellium is a native macOS menu bar app for understanding what is happening to your Mac's battery and power system. It collects the signals macOS exposes, keeps history in local SQLite storage, explains patterns without pretending that estimates are measurements, and gives you an optional AI assistant grounded in the same evidence.
 
-## What Cellium does
+The current public release is **Cellium 0.1.8**.
 
-Cellium answers the practical battery questions first:
+## What Cellium answers
 
-- **What is happening now?** Battery level, charging state, power source, temperature, health and cycle count.
-- **What changed?** Local history for battery level, power, CPU, memory, disk activity and temperature.
-- **What is consuming resources?** The apps and processes currently associated with the highest CPU/RAM and estimated battery impact.
-- **Is the battery behaving normally?** Deterministic alerts and local learning help surface rapid discharge, heat, high memory use and unusual patterns.
-- **Can I inspect the evidence?** Yes. Data is stored locally in SQLite and unavailable measurements stay unavailable instead of becoming invented precision.
+- **What is happening right now?** Battery level, active cells, charging state, power source, temperature, weather context, health and cycle count.
+- **What changed over time?** Battery charge, power, temperature, CPU, memory, disk and process history across selectable time windows.
+- **What is using the Mac?** Hourly Computer use estimates based on observed CPU and memory activity, plus process-level history and estimated battery impact.
+- **Should I take action?** Deterministic alerts, local learning and optional macOS notifications surface conditions that have enough evidence to matter.
+- **What does the AI know?** The optional assistant receives structured Cellium evidence, separates measured facts from estimates, keeps chat history locally and shows analysis logs with the prompt, response and local evidence.
 
-## See Cellium in action
+## Showcase
+
+These screenshots show the current Cellium interface, including the live dashboard, history, Computer use, alerts and AI surfaces.
 
 <p align="center">
-  <img src="Documentation/images/ss-cellium.png" alt="Cellium dashboard showing battery level, power, health, cycles, system metrics and local history" width="1000">
+  <img src="Documentation/images/sscellium.png" alt="Cellium dashboard with battery level, active cells, weather, health, cycles, system use and history" width="1000">
 </p>
 
-The dashboard is designed to make the important state visible immediately: battery percentage, active cells, temperature, power source, health, cycles, system load and historical trends.
+<p align="center"><sub>Live dashboard: current battery state, system context and historical signals in one glance.</sub></p>
 
 <table align="center">
   <tr>
     <td align="center" width="50%">
-      <img src="Documentation/images/cellium-showcase-2.png" alt="Clean Cellium dashboard with battery alert and history" width="360" style="border-radius: 18px; border: 1px solid #334047;">
+      <img src="Documentation/images/sscellium1.png" alt="Cellium dashboard showing battery health, power mode, alerts and 24 hour history" width="460">
       <br>
-      <sub>Current state, alerts and battery history</sub>
+      <sub>Current state, health, power mode and 24-hour history</sub>
     </td>
     <td align="center" width="50%">
-      <img src="Documentation/images/cellium-showcase-3.png" alt="Cellium charts, app impact and local learning" width="360" style="border-radius: 18px; border: 1px solid #334047;">
+      <img src="Documentation/images/sscellium2.png" alt="Cellium history page showing 24 hour battery history, Computer use and weekly learning" width="460">
       <br>
-      <sub>System trends, app impact and local learning</sub>
+      <sub>History, Computer use and weekly learning</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="Documentation/images/sscellium3.png" alt="Cellium alerts page showing proactive alerts and AI analysis logs" width="460">
+      <br>
+      <sub>Alerts and AI analysis history</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="Documentation/images/sscellium4.png" alt="Cellium AI assistant chat showing a battery analysis and conversation" width="460">
+      <br>
+      <sub>Evidence-aware AI chat and analysis</sub>
     </td>
   </tr>
 </table>
 
-## Smart by design
-
-Cellium is intentionally **local-first and evidence-driven**:
-
-- No account, cloud sync or analytics is required for normal monitoring.
-- Battery health, battery level, cycles and battery wear are treated as different signals.
-- Estimates are labeled as estimates; Cellium does not claim exact per-process wattage when macOS cannot provide it.
-- Read-only adapters are used. Cellium does not write to the SMC, install kernel extensions or require a privileged helper.
-- Optional integrations remain user-controlled and feature-gated.
-
 ## Current capabilities
 
-- Native macOS menu bar dashboard built with Swift and SwiftUI/AppKit.
-- Battery percentage, charging state, power source, temperature, health and cycle count.
-- Thermal-state and Low Power Mode signals where macOS exposes them.
-- Local SQLite persistence for battery, power and system history.
-- Historical charts with selectable time windows and hover details.
-- Process/app impact summaries using CPU, memory and estimated battery-discharge contribution.
-- Configurable sampling, deterministic learning and macOS alerts for important conditions.
-- A conservative data model that reports quality and missing readings honestly.
+### Live battery dashboard
 
-Cellium is still evolving. Exact per-process wattage, Intel compatibility, charge automation, WeatherKit and notarized distribution are not promises of the current release.
+- Battery percentage and active-cell visualization.
+- Charging state, power source, power draw and temperature.
+- Battery health and cycle count shown as separate signals.
+- Thermal state, Low Power Mode, CPU, memory and disk status.
+- Optional weather context with temperature, condition, humidity and wind.
+- Clear “measured”, “calculated”, “estimated” and “no data” boundaries.
 
-## Product surfaces
+### Local history and trends
 
-The product is being expanded around a few focused screens instead of a noisy dashboard:
+- SQLite-backed history for battery, power, temperature, system use and process samples.
+- Selectable windows from **1 hour, 2 hours, 6 hours, 12 hours and 24 hours** through **3 days, 7 days, 14 days, 30 days, 90 days, 6 months, 1 year and all history**.
+- Interactive charts with hover details for charge, power, temperature, CPU, memory and disk activity.
+- Time windows keep their real resolution instead of silently collapsing everything into a misleading 24-hour average.
+- Missing readings remain missing instead of being replaced with invented precision.
 
-- **Dashboard** — current battery state, system status and history.
-- **Alerts** — persistent battery/process conditions with optional macOS notifications.
-- **App history** — historical CPU/RAM and estimated energy impact by process.
-- **Learning** — local patterns and recommendations based on a configurable evidence window of at least seven days.
-- **Battery agent** — optional chat and explanations about real battery state, consumption, cycles, health and wear.
+### Computer use and local learning
 
-## Optional AI agent — next update
+- Hourly Computer use timeline based on observed CPU and memory activity.
+- Date navigation for reviewing previous Computer use days.
+- Multi-day ranges render hourly activity across the selected period.
+- Weekly learning shows observed charge, power and activity windows by day.
+- Coverage and observed days remain visible so Cellium does not claim a routine before there is enough history.
+- Process history groups applications, daemons, scripts and processes by average CPU, memory and estimated battery impact.
 
-The AI layer is planned as an opt-in feature, not a requirement for monitoring:
+### Alerts and notifications
 
-- **Providers:** OpenRouter and Ollama.
-- **Privacy:** API keys stored in macOS Keychain, never in SQLite or the repository.
-- **Automation:** disabled by default; optional hourly analysis only when the user enables it and Wi‑Fi is available.
-- **Chat:** available on demand from an agent icon in the main dashboard.
-- **Evidence:** the agent will use Cellium's measured battery, power, health, cycle, temperature and usage history, and must distinguish observations from conclusions.
+- Persistent alert history for battery, thermal, power and resource conditions.
+- Proactive alerts with severity, measurements and a clear explanation of the trigger.
+- Alerts can be reviewed, grouped by day and cleared from the Alerts surface.
+- Packaged app builds can request macOS notification permission and deliver proactive alerts through Notification Center.
+- Notification behavior is opt-in through the system permission flow; direct SwiftPM development launches do not pretend to be a packaged notification-capable app.
 
-The agent must not invent a diagnosis or claim battery damage from a signal Cellium did not measure.
+### Optional AI assistant
 
-### How a Cellium summary is built
+The AI layer is available now as an opt-in feature. Normal monitoring does not require an AI provider.
 
-A summary is not a random chat response. Cellium first creates a structured evidence snapshot from the signals it can measure:
+- **Providers:** OpenRouter and local Ollama.
+- **Models:** a built-in OpenRouter catalog with recommended, budget, fast, balanced and free options, plus custom model support.
+- **Chat:** persistent local sessions, session titles, clear/new-session controls and battery-focused conversations.
+- **Analysis:** manual analysis and optional automatic analysis, limited to one short request per hour when enabled and Wi-Fi is available.
+- **Evidence:** structured battery, power, temperature, health, cycle, system, process, weather and learning context.
+- **Analysis log:** prompt, response, provider, model, status, evidence and recommendations are visible in the Alerts surface.
+- **Response formatting:** AI responses are rendered as Markdown and repaired when a provider joins sentences or returns escaped line breaks.
+- **Safety:** the assistant must distinguish measured facts from estimates, acknowledge missing history and avoid diagnosing battery damage without supporting evidence.
 
-1. **Observe:** battery level, charge state, power draw, temperature, health, cycles, CPU/RAM, disk activity and recent history.
-2. **Compare:** current behavior against the user's local history and learned normal patterns.
-3. **Explain:** identify what changed, what is likely contributing to it and how confident the evidence is.
-4. **Recommend:** offer a practical next step, such as checking a high-impact app or charging based on the user's actual pattern.
+### Local secrets and privacy controls
 
-The current release uses deterministic local calculations and does not call an LLM for summaries yet. The optional agent will receive this structured context—not credentials, raw private files or an invented diagnosis—and will show the measured facts separately from its explanation.
+- OpenRouter API keys are encrypted locally in Application Support using Cellium's local installation secret store.
+- Cellium does not use macOS Keychain for this installation secret flow.
+- Credentials are not written to SQLite, the repository or plain `.env` files.
+- AI, automatic analysis, weather, update checks and notifications are optional capabilities with explicit user-facing controls.
+
+## Design principles
+
+Cellium is intentionally local-first and evidence-driven:
+
+- No account or cloud dashboard is required for normal monitoring.
+- Read-only macOS adapters are used for system measurements.
+- Cellium does not write to the SMC, install kernel extensions or require a privileged helper.
+- Battery level, battery health, cycle count and estimated wear are not treated as interchangeable values.
+- Exact per-process wattage is not claimed when macOS does not expose it. Process impact is labeled as an estimate.
+- The interface shows when history is incomplete instead of presenting false certainty.
+
+## How the data flows
+
+```text
+macOS power, system and process APIs
+                 │
+                 ▼
+        CelliumDarwin read-only adapters
+                 │ validated snapshots
+                 ▼
+             CelliumCore
+                 │
+        ┌────────┼─────────┐
+        ▼        ▼         ▼
+   CelliumStore  App   CelliumIntelligence
+   local SQLite  UI    optional AI + chat
+        │        │         │
+        └────────┴─────────┘
+          evidence, history and alerts
+```
 
 ## Requirements
 
 - macOS 14 or later.
+- Apple Silicon is the currently validated development and distribution target.
 - Xcode with the Swift 6 toolchain for development.
-- Apple Silicon is the currently validated development target. Intel support is not yet a compatibility promise.
+- An OpenRouter API key or a reachable Ollama endpoint is required only when the optional AI assistant is enabled.
 
-## Quick start
+Intel compatibility, exact per-process wattage, charge automation and Apple-notarized distribution are not promises of the current release.
+
+## Install the latest release
+
+Download the current DMG from [GitHub Releases](https://github.com/Obed0101/Cellium/releases/latest). The current artifact is `Cellium-0.1.8.dmg`.
+
+The disk image contains `Cellium.app` and an `Applications` shortcut for drag-to-install. The free release is ad-hoc signed, not Apple-notarized, and macOS may require **System Settings → Privacy & Security → Open Anyway** on first launch. See [Documentation/DISTRIBUTION.md](Documentation/DISTRIBUTION.md) for Developer ID signing and notarization.
+
+## Build and test locally
 
 ```bash
 git clone https://github.com/Obed0101/Cellium.git
@@ -125,58 +179,50 @@ swift build --product CelliumApp
 swift build --product cellium
 ```
 
-To launch the menu bar app from Xcode, open `Cellium.xcodeproj` and run the `Cellium` scheme.
+To run the app from Xcode, open `Cellium.xcodeproj` and run the `Cellium` scheme.
 
-## Install from a DMG
-
-Build the standard macOS drag-to-Applications installer locally:
+To create a local drag-to-Applications installer:
 
 ```bash
 ./Scripts/build-dmg.sh
-open Distribution/Cellium-0.1.4.dmg
+open Distribution/Cellium-0.1.8.dmg
 ```
 
-The disk image contains `Cellium.app` and an `Applications` shortcut. Free builds use a valid ad-hoc bundle signature; they are not Apple-notarized and may require **System Settings → Privacy & Security → Open Anyway** on first launch. See [distribution](Documentation/DISTRIBUTION.md) for Developer ID signing and notarization details.
+The distribution script validates the app bundle and DMG. It refuses to overwrite an existing disk image and supports Developer ID signing when configured. See [Documentation/DISTRIBUTION.md](Documentation/DISTRIBUTION.md).
 
-## Updates
-
-Cellium can optionally check the public GitHub Releases API once per day. The setting is disabled by default, and the app never downloads or executes a remote binary automatically. Enable it from **Settings → Updates**, or use **Check now** for a manual check.
-
-## Architecture
+## Repository layout
 
 ```text
-macOS power APIs
-        │ read-only adapters
-        ▼
-CelliumDarwin
-        │ validated snapshots
-        ▼
-CelliumCore ─── CelliumStore ─── local SQLite history
-        │
-        ├── CelliumApp
-        ├── CelliumAutomation (explicit, allowlisted actions)
-        └── CelliumIntelligence (optional, user-controlled)
+App/                         Native menu bar app and SwiftUI surfaces
+Packages/CelliumCore/        Models, sampling and validation
+Packages/CelliumDarwin/      Read-only macOS power and system adapters
+Packages/CelliumStore/       SQLite history, migrations and queries
+Packages/CelliumIntelligence/AI contracts, providers, secrets and evidence
+Packages/CelliumAutomation/  Explicit, allowlisted automation contracts
+Tests/                       Core, Darwin, store and intelligence tests
+Documentation/               Distribution, platform, security and showcase assets
+Scripts/                     Local build and distribution helpers
 ```
-
-See the [platform constraints](Documentation/PLATFORM_CONSTRAINTS.md), [sensor matrix](Documentation/SENSOR_MATRIX.md), [threat model](Documentation/THREAT_MODEL.md) and [branding policy](Documentation/BRANDING.md) for implementation boundaries.
 
 ## Privacy and security
 
-Cellium is designed to operate without network access during normal battery monitoring. It does not need an account and does not collect window titles, document content, keyboard input, screenshots or full device serials. Optional capabilities must be user-facing, allowlisted and feature-gated.
+Cellium is designed to operate without network access during normal battery monitoring. It does not require an account and does not collect window titles, document content, keyboard input, screenshots or full device serials. Optional provider, weather, update and notification capabilities are user-controlled.
 
 Read [SECURITY.md](SECURITY.md) before reporting a vulnerability. Do not put credentials, private telemetry, database exports or signing material in an issue or pull request.
 
+## Updates
+
+Cellium can check the public GitHub Releases API once per day when automatic checks are enabled, or immediately when the user presses **Check now** in Settings. It compares semantic versions, opens the public release page when an update exists and never downloads or executes a remote binary automatically.
+
 ## Contributing
 
-Contributions are welcome while the project is being shaped. Read [CONTRIBUTING.md](CONTRIBUTING.md), use the `dev` branch as the integration target, keep pull requests focused and run the test suite before opening a PR.
+Contributions are welcome while the project is being shaped. Read [CONTRIBUTING.md](CONTRIBUTING.md), use the `dev` branch as the integration target, keep pull requests focused and run the test suite before opening a pull request.
+
+Before changing a sensor or capability, check the [platform constraints](Documentation/PLATFORM_CONSTRAINTS.md), [sensor matrix](Documentation/SENSOR_MATRIX.md), [threat model](Documentation/THREAT_MODEL.md) and [branding policy](Documentation/BRANDING.md).
 
 ## Project status
 
-The `main` branch is the stable public branch. Active development happens on `dev`. The project is intentionally conservative: a sensor or feature is not considered ready merely because a value can be read once on one Mac.
-
-## Star history
-
-[![Star History Chart](https://api.star-history.com/svg?repos=Obed0101/Cellium&type=Date)](https://star-history.com/#Obed0101/Cellium&Date)
+The `main` branch is the stable public branch. Active development happens on `dev`. Cellium is intentionally conservative: a sensor or feature is not considered ready merely because a value can be read once on one Mac.
 
 ## License
 
