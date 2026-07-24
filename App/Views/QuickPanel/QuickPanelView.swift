@@ -5,6 +5,7 @@ import Darwin
 import CelliumCore
 import CelliumDarwin
 import CelliumStore
+import CelliumIntelligence
 
 struct ProactiveAlert: Equatable {
     let identifier: String
@@ -31,6 +32,28 @@ struct ProactiveAlert: Equatable {
     }
 }
 
+struct CelliumAgentSession: Codable, Equatable, Identifiable {
+    let id: UUID
+    var title: String
+    var messages: [AgentChatMessage]
+    let createdAt: Date
+    var updatedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        title: String,
+        messages: [AgentChatMessage] = [],
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.title = title
+        self.messages = messages
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
 enum HistoryRange: String, CaseIterable, Identifiable {
     case hour = "1h"
     case twoHours = "2h"
@@ -48,34 +71,34 @@ enum HistoryRange: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var label: String {
-        switch self {
-        case .hour:
-            return "1 hour"
-        case .twoHours:
-            return "2 hours"
-        case .sixHours:
-            return "6 hours"
-        case .twelveHours:
-            return "12 hours"
-        case .day:
-            return "24 hours"
-        case .threeDays:
-            return "3 days"
-        case .week:
-            return "7 days"
-        case .twoWeeks:
-            return "14 days"
-        case .month:
-            return "30 days"
-        case .quarter:
-            return "90 days"
-        case .halfYear:
-            return "6 months"
-        case .year:
-            return "1 year"
-        case .all:
-            return "All data"
+    func label(for language: CelliumLanguage) -> String {
+        switch (self, language) {
+        case (.hour, .spanish): return "1 hora"
+        case (.twoHours, .spanish): return "2 horas"
+        case (.sixHours, .spanish): return "6 horas"
+        case (.twelveHours, .spanish): return "12 horas"
+        case (.day, .spanish): return "24 horas"
+        case (.threeDays, .spanish): return "3 días"
+        case (.week, .spanish): return "7 días"
+        case (.twoWeeks, .spanish): return "14 días"
+        case (.month, .spanish): return "30 días"
+        case (.quarter, .spanish): return "90 días"
+        case (.halfYear, .spanish): return "6 meses"
+        case (.year, .spanish): return "1 año"
+        case (.all, .spanish): return "Todo el historial"
+        case (.hour, .english): return "1 hour"
+        case (.twoHours, .english): return "2 hours"
+        case (.sixHours, .english): return "6 hours"
+        case (.twelveHours, .english): return "12 hours"
+        case (.day, .english): return "24 hours"
+        case (.threeDays, .english): return "3 days"
+        case (.week, .english): return "7 days"
+        case (.twoWeeks, .english): return "14 days"
+        case (.month, .english): return "30 days"
+        case (.quarter, .english): return "90 days"
+        case (.halfYear, .english): return "6 months"
+        case (.year, .english): return "1 year"
+        case (.all, .english): return "All history"
         }
     }
 
@@ -139,14 +162,38 @@ enum HistoryRange: String, CaseIterable, Identifiable {
         return min(10_000, max(100, Int(ceil(duration / interval)) + 2))
     }
 
-    var displayPointLimit: Int {
-        240
-    }
+     var displayPointLimit: Int {
+         switch self {
+         case .hour: return 60
+         case .twoHours: return 120
+         case .sixHours: return 360
+         case .twelveHours: return 720
+         case .day: return 1_440
+         case .threeDays: return 720
+         case .week: return 720
+         case .twoWeeks: return 720
+         case .month, .quarter, .halfYear, .year, .all: return 720
+         }
+     }
+
 }
 
-@MainActor
-final class BatteryViewModel: ObservableObject {
+ private struct IntelligenceUsageBucketKey: Hashable {
+     let day: Date
+     let hour: Int
+ }
+
+ private struct IntelligenceUsageBucketSummary {
+     let key: IntelligenceUsageBucketKey
+     let activityScore: Double?
+     let cpuPercent: Double?
+     let memoryPercent: Double?
+ }
+
+ @MainActor
+ final class BatteryViewModel: ObservableObject {
     @Published private(set) var battery: BatterySnapshot
+    @Published private(set) var healthPercent: Double?
     @Published private(set) var system: SystemSnapshot
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var recentSamples: [StoredBatterySample] = [] {
@@ -155,11 +202,22 @@ final class BatteryViewModel: ObservableObject {
         }
     }
     @Published private(set) var recentSessions: [BatterySession] = []
+    @Published private(set) var processHistorySamples: [StoredProcessSample] = []
+    @Published private(set) var alertEvents: [StoredAlertEvent] = []
+    @Published private(set) var intelligenceAnalysisLogs: [StoredIntelligenceAnalysis] = []
     @Published private(set) var historyAggregates: [BatteryAggregate] = [] {
         didSet { cachedHistoryLabels = nil }
     }
-    @Published private(set) var learningAggregates: [BatteryAggregate] = []
-    @Published private(set) var historyRange: HistoryRange = .twoHours {
+     @Published private(set) var hourlyAggregates: [BatteryAggregate] = []
+     @Published private(set) var computerUseDate: Date = Calendar.autoupdatingCurrent.startOfDay(for: Date())
+     @Published private(set) var learningAggregates: [BatteryAggregate] = []
+     @Published private(set) var learningHourlyAggregates: [BatteryAggregate] = []
+     @Published private(set) var cycleUsageQuarterHourBuckets: [StoredCycleUsageBucket] = []
+     @Published private(set) var cycleUsageDailyBuckets: [StoredCycleUsageBucket] = []
+     @Published private(set) var cycleUsageSummary: CycleUsageSummary?
+     @Published private(set) var cyclePlanConfiguration = CyclePlanConfiguration()
+
+    @Published private(set) var historyRange: HistoryRange = .day {
         didSet { cachedHistoryLabels = nil }
     }
     @Published private(set) var processImpacts: [ProcessEnergyImpact] = []
@@ -195,18 +253,78 @@ final class BatteryViewModel: ObservableObject {
     @Published private(set) var updateCheckEnabled: Bool
     @Published private(set) var updateState: GitHubUpdateState = .idle
     @Published private(set) var lastUpdateCheck: Date?
+    @Published private(set) var intelligenceConfiguration: IntelligenceConfiguration
+    @Published private(set) var intelligenceAPIKeyConfigured = false
+    @Published private(set) var localIntelligenceInsight: BatteryInsight?
+    @Published private(set) var intelligenceInsight: BatteryInsight?
+    @Published private(set) var intelligenceError: String?
+     @Published private(set) var intelligenceMessages: [AgentChatMessage] = []
+     @Published private(set) var intelligenceSessions: [CelliumAgentSession] = []
+     @Published private(set) var activeIntelligenceSessionID: UUID?
+     @Published private(set) var isGeneratingIntelligence = false
+     @Published private(set) var isGeneratingAnalysis = false
+
+    @Published private(set) var showingAgent = false
+    @Published private(set) var wifiAvailable = false
+    @Published private(set) var isValidatingIntelligenceProvider = false
+    @Published private(set) var intelligenceValidationMessage: String?
 
     var onProactiveAlert: ((ProactiveAlert) -> Void)?
 
+    var isIntelligenceProviderConfigured: Bool {
+        let model = intelligenceConfiguration.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !model.isEmpty else { return false }
+
+        switch intelligenceConfiguration.provider {
+        case .openRouter:
+            return intelligenceAPIKeyConfigured
+        case .ollama:
+            guard let url = intelligenceConfiguration.ollamaURL,
+                  let scheme = url.scheme?.lowercased(),
+                  ["http", "https"].contains(scheme),
+                  url.host != nil else {
+                return false
+            }
+            return true
+        }
+    }
+
+    var isIntelligenceReady: Bool {
+        intelligenceConfiguration.enabled && isIntelligenceProviderConfigured
+    }
+
+    var latestIntelligenceAnalysis: StoredIntelligenceAnalysis? {
+        intelligenceAnalysisLogs.first {
+            $0.kind == .analysis && $0.status == .succeeded
+        }
+    }
+
+    var runningIntelligenceAnalysis: StoredIntelligenceAnalysis? {
+        intelligenceAnalysisLogs.first {
+            $0.kind == .analysis && $0.status == .running
+        }
+    }
+
+    var intelligenceAnalysisCount: Int {
+        intelligenceAnalysisLogs.count
+    }
+
     private let defaults: UserDefaults
+    private var healthStabilizer = BatteryHealthStabilizer()
     private let batteryReader: IOKitBatteryReader
     private let systemReader: SystemStateReader
     private let coordinator: SamplingCoordinator
     private let store: SQLiteStore?
     private let weatherCoordinator: WeatherCoordinator
+    private let cycleBudgetCoordinator = CycleBudgetCoordinator()
     private let processMonitor = ProcessEnergyMonitor()
     private let updateChecker = GitHubUpdateChecker()
+    private let intelligenceService = BatteryIntelligenceService()
+    private let wifiMonitor = WiFiNetworkMonitor()
     private var updateTask: Task<Void, Never>?
+    private var intelligenceTask: Task<Void, Never>?
+    private var activeIntelligenceRunID: UUID?
+    private var lastAutomaticIntelligenceAnalysis: Date?
     private var panelVisible = false
     private var liveRefreshTask: Task<Void, Never>?
     private var panelVisibilityTask: Task<Void, Never>?
@@ -217,10 +335,13 @@ final class BatteryViewModel: ObservableObject {
     private var lastPersistedDataRefresh: Date?
     private var lastHistoryRefresh: Date?
     private var cachedOrderedRecentSamples: [(date: Date, charge: Int)] = []
-    private var cachedHistoryLabels: HistoryLabels?
-    private var lastProactiveAlertKey: String?
+     private var cachedHistoryLabels: HistoryLabels?
+     private var lastProactiveAlertKey: String?
+     private var lastIntelligenceActionNotificationKey: String?
+     private var lastIntelligenceActionNotificationDate: Date?
 
-    private struct HistoryLabels {
+     private struct HistoryLabels {
+
         let window: String
         let start: String
         let middle: String
@@ -235,8 +356,19 @@ final class BatteryViewModel: ObservableObject {
         self.defaults = .standard
         self.batteryReader = batteryReader
         self.systemReader = systemReader
+        self.cyclePlanConfiguration = Self.loadCyclePlanConfiguration(from: .standard)
         let initialLanguage = CelliumLanguage(rawValue: defaults.string(forKey: "cellium.language") ?? "") ?? .english
         self.language = initialLanguage
+        let historyRangeMigrationKey = "cellium.historyRange.default24h.migrated"
+        if !defaults.bool(forKey: historyRangeMigrationKey) {
+            self.historyRange = .day
+            defaults.set(HistoryRange.day.rawValue, forKey: "cellium.historyRange")
+            defaults.set(true, forKey: historyRangeMigrationKey)
+        } else {
+            self.historyRange = HistoryRange(
+                rawValue: defaults.string(forKey: "cellium.historyRange") ?? ""
+            ) ?? .day
+        }
         self.samplingPreference = SamplingPreference(
             rawValue: defaults.string(forKey: "cellium.samplingPreference") ?? ""
         ) ?? .systemDefault
@@ -247,6 +379,25 @@ final class BatteryViewModel: ObservableObject {
         self.criticalChargePercent = defaults.object(forKey: "cellium.criticalChargePercent") as? Int ?? 20
         self.updateCheckEnabled = defaults.object(forKey: "cellium.updateCheckEnabled") as? Bool ?? false
         self.lastUpdateCheck = defaults.object(forKey: "cellium.lastUpdateCheck") as? Date
+         self.lastAutomaticIntelligenceAnalysis = defaults.object(forKey: "cellium.intelligence.lastAnalysis") as? Date
+         self.lastIntelligenceActionNotificationKey = defaults.string(forKey: "cellium.intelligence.lastActionNotificationKey")
+         self.lastIntelligenceActionNotificationDate = defaults.object(forKey: "cellium.intelligence.lastActionNotificationDate") as? Date
+         self.intelligenceConfiguration = IntelligenceConfiguration(
+
+            enabled: defaults.object(forKey: "cellium.intelligence.enabled") as? Bool ?? false,
+            provider: IntelligenceProvider(
+                rawValue: defaults.string(forKey: "cellium.intelligence.provider") ?? ""
+            ) ?? .openRouter,
+            model: defaults.string(forKey: "cellium.intelligence.model") ?? "openrouter/auto",
+            automaticAnalysisEnabled: defaults.object(forKey: "cellium.intelligence.automatic") as? Bool ?? false,
+            ollamaEndpoint: defaults.string(forKey: "cellium.intelligence.ollamaEndpoint") ?? "http://127.0.0.1:11434"
+        )
+         let sessions = Self.loadIntelligenceSessions(from: defaults, language: initialLanguage)
+         self.intelligenceSessions = sessions
+         self.activeIntelligenceSessionID = sessions.first?.id
+         self.intelligenceMessages = sessions.first?.messages ?? []
+         self.wifiAvailable = wifiMonitor.isWiFiAvailable
+
         self.weatherCoordinator = WeatherCoordinator()
         self.weatherCoordinator.setLanguage(initialLanguage)
         self.weatherLocationMode = weatherCoordinator.mode
@@ -256,7 +407,10 @@ final class BatteryViewModel: ObservableObject {
         self.weatherSnapshot = weatherCoordinator.snapshot
         self.weatherError = weatherCoordinator.errorMessage
         let date = Date()
-        self.battery = batteryReader.readSnapshot(at: date)
+        let initialBattery = batteryReader.readSnapshot(at: date)
+        self.battery = initialBattery
+        let initialHealth = defaults.object(forKey: Self.healthDefaultsKey(for: initialBattery.designCapacityMAh)) as? Double
+        self.healthStabilizer = BatteryHealthStabilizer(initialPercent: initialHealth)
         self.system = systemReader.readSnapshot(at: date)
         self.lastUpdated = date
 
@@ -279,13 +433,163 @@ final class BatteryViewModel: ObservableObject {
         weatherCoordinator.onChange = { [weak self] in
             self?.syncWeatherState()
         }
+        refreshHealthEstimate()
     }
 
-    var healthPercent: Double? {
-        BatteryMath.healthPercent(
+    private static func loadIntelligenceMessages(from defaults: UserDefaults) -> [AgentChatMessage] {
+        guard let data = defaults.data(forKey: "cellium.intelligence.chatHistory") else { return [] }
+        let decoder = JSONDecoder()
+        guard let messages = try? decoder.decode([AgentChatMessage].self, from: data) else { return [] }
+        return Array(messages.suffix(100))
+    }
+
+    private static func loadCyclePlanConfiguration(from defaults: UserDefaults) -> CyclePlanConfiguration {
+        guard let data = defaults.data(forKey: "cellium.cyclePlan.configuration"),
+              let configuration = try? JSONDecoder().decode(CyclePlanConfiguration.self, from: data) else {
+            return CyclePlanConfiguration()
+        }
+        return configuration
+    }
+
+    private func persistCyclePlanConfiguration() {
+        guard let data = try? JSONEncoder().encode(cyclePlanConfiguration) else { return }
+        defaults.set(data, forKey: "cellium.cyclePlan.configuration")
+    }
+
+    private static func loadIntelligenceSessions(
+        from defaults: UserDefaults,
+        language: CelliumLanguage
+    ) -> [CelliumAgentSession] {
+        let decoder = JSONDecoder()
+        if let data = defaults.data(forKey: "cellium.intelligence.sessions"),
+           let sessions = try? decoder.decode([CelliumAgentSession].self, from: data),
+           !sessions.isEmpty {
+            return sessions
+                .filter { !$0.messages.isEmpty }
+                .sorted { $0.updatedAt > $1.updatedAt }
+        }
+
+        let legacyMessages = loadIntelligenceMessages(from: defaults)
+        guard !legacyMessages.isEmpty else { return [] }
+        let title = language == .spanish ? "Nuevo chat" : "New chat"
+        return [CelliumAgentSession(title: title, messages: legacyMessages)]
+    }
+
+    private static func sessionTitle(
+        for messages: [AgentChatMessage],
+        language: CelliumLanguage,
+        fallback: String
+    ) -> String {
+        guard let firstUserMessage = messages.first(where: { $0.role == .user }) else {
+            return fallback
+        }
+        let normalized = firstUserMessage.content
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return fallback }
+        let limit = 32
+        if normalized.count <= limit { return normalized }
+        return String(normalized.prefix(limit - 1)) + "…"
+    }
+
+    private func persistIntelligenceSessions() {
+        guard !intelligenceSessions.isEmpty,
+              let data = try? JSONEncoder().encode(intelligenceSessions) else {
+            defaults.removeObject(forKey: "cellium.intelligence.sessions")
+            defaults.removeObject(forKey: "cellium.intelligence.chatHistory")
+            return
+        }
+        defaults.set(data, forKey: "cellium.intelligence.sessions")
+        defaults.removeObject(forKey: "cellium.intelligence.chatHistory")
+    }
+
+    private func persistIntelligenceMessages() {
+        guard let activeIntelligenceSessionID,
+              let index = intelligenceSessions.firstIndex(where: { $0.id == activeIntelligenceSessionID }) else {
+            persistIntelligenceSessions()
+            return
+        }
+
+        let messages = Array(intelligenceMessages.suffix(100))
+        if messages.isEmpty {
+            intelligenceSessions.remove(at: index)
+            self.activeIntelligenceSessionID = nil
+            persistIntelligenceSessions()
+            return
+        }
+
+        let fallback = language == .spanish ? "Nuevo chat" : "New chat"
+        intelligenceSessions[index].messages = messages
+        intelligenceSessions[index].title = Self.sessionTitle(
+            for: messages,
+            language: language,
+            fallback: fallback
+        )
+        intelligenceSessions[index].updatedAt = Date()
+        intelligenceSessions.sort { $0.updatedAt > $1.updatedAt }
+        persistIntelligenceSessions()
+    }
+
+    private func refreshHealthEstimate() {
+        let rawHealth = BatteryMath.healthPercent(
             nominalChargeCapacityMAh: battery.nominalChargeCapacityMAh,
             designCapacityMAh: battery.designCapacityMAh
         )
+        let nextHealth = healthStabilizer.update(rawHealth)
+        if healthPercent != nextHealth {
+            healthPercent = nextHealth
+        }
+        if let nextHealth {
+            defaults.set(nextHealth, forKey: Self.healthDefaultsKey(for: battery.designCapacityMAh))
+        }
+    }
+
+    private static func healthDefaultsKey(for designCapacityMAh: Int?) -> String {
+        guard let designCapacityMAh, designCapacityMAh > 0 else {
+            return "cellium.battery.health.stablePercent.unknown"
+        }
+        return "cellium.battery.health.stablePercent.\(designCapacityMAh)"
+    }
+
+    var chargeLimitPercent: Int? {
+        guard let limit = battery.chargeLimitPercent,
+              limit > 0,
+              limit < 100 else {
+            return nil
+        }
+        return limit
+    }
+
+    var isChargingToLimit: Bool {
+        guard let limit = chargeLimitPercent,
+              let charge = battery.chargePercent else {
+            return false
+        }
+        return battery.externalPowerConnected && battery.isCharging && charge < limit
+    }
+
+    var isChargeLimitActive: Bool {
+        guard let limit = battery.chargeLimitPercent,
+              let charge = battery.chargePercent,
+              limit > 0,
+              limit < 100 else {
+            return false
+        }
+        return battery.externalPowerConnected && charge >= limit
+    }
+
+    /// Equivalent-use history can remain elevated after the Mac is plugged in.
+    /// Keep that historical value, but do not present it as an active discharge
+    /// warning while external power is holding the battery at its limit.
+    var isBatteryUseCurrentlyPausedByExternalPower: Bool {
+        guard battery.externalPowerConnected else { return false }
+        if battery.isCharging || isChargingToLimit || isChargeLimitActive {
+            return true
+        }
+        guard let watts = batteryPowerWatts else {
+            return true
+        }
+        return watts <= 0.05
     }
 
     var batteryPowerWatts: Double? {
@@ -299,12 +603,17 @@ final class BatteryViewModel: ObservableObject {
     }
 
     var batteryPowerLabel: String {
-        guard let watts = batteryPowerWatts else { return copy(.noReading) }
+        guard let watts = batteryPowerWatts else {
+            return battery.externalPowerConnected && !battery.isCharging
+                ? copy(.powerNotMeasured)
+                : copy(.noReading)
+        }
         return String(format: "%.1f W", watts)
     }
 
     var batteryPercentPerMinute: Double? {
         guard !battery.isCharging,
+              !isChargeLimitActive,
               let watts = batteryPowerWatts,
               watts > 0,
               let capacity = battery.nominalChargeCapacityMAh ?? battery.currentCapacityMAh,
@@ -382,7 +691,8 @@ final class BatteryViewModel: ObservableObject {
     }
 
     var effectiveBatteryPercentPerMinute: Double? {
-        observedBatteryPercentPerMinute ?? batteryPercentPerMinute
+        if isChargeLimitActive { return nil }
+        return observedBatteryPercentPerMinute ?? batteryPercentPerMinute
     }
 
     var copy: CelliumCopy {
@@ -534,20 +844,36 @@ final class BatteryViewModel: ObservableObject {
 
     var learningDaysLabel: String {
         if language == .spanish {
-            return "\(learningDaysObserved)/7 días"
+            return "\(learningDaysObserved)/7 días con datos"
         }
-        return "\(learningDaysObserved)/7 days"
+        return "\(learningDaysObserved)/7 days with data"
     }
 
     var learnedBatterySymbol: String {
-        if statusKind == .attention { return "exclamationmark.triangle" }
-        if battery.isCharging { return "bolt.circle" }
+        if statusKind == .attention { return "exclamationmark.octagon" }
+        if statusKind == .elevated { return "exclamationmark.triangle" }
+        if battery.isCharging || isChargingToLimit || isChargeLimitActive { return "bolt.circle" }
         if learningDaysObserved == 0 { return "hourglass" }
         return "waveform.path.ecg"
     }
 
     var learnedBatteryTitle: String {
         guard learningEnabled else { return language == .spanish ? "Aprendizaje pausado" : "Learning paused" }
+        if isBatteryUseCurrentlyPausedByExternalPower {
+            return language == .spanish ? "Alimentación externa activa" : "External power active"
+        }
+        if let cycleUsageSummary {
+            switch cycleUsageSummary.status {
+            case .high:
+                return language == .spanish ? "Uso de batería alto" : "High battery use"
+            case .elevated:
+                return language == .spanish ? "Uso de batería elevado" : "Elevated battery use"
+            case .onTrack:
+                return language == .spanish ? "Uso de batería en ritmo" : "Battery use on track"
+            case .insufficientData:
+                break
+            }
+        }
         switch learningDaysObserved {
         case 0:
             return language == .spanish ? "Reuniendo evidencia" : "Collecting evidence"
@@ -563,6 +889,15 @@ final class BatteryViewModel: ObservableObject {
             return language == .spanish
                 ? "Activa el aprendizaje para comparar días reales."
                 : "Enable learning to compare real usage days."
+        }
+        if isBatteryUseCurrentlyPausedByExternalPower {
+            return language == .spanish
+                ? "Uso acumulado de hoy: la batería está conectada y no hay descarga activa ahora."
+                : "Today's accumulated use: the battery is connected and there is no active discharge now."
+        }
+        if let cycleUsageSummary,
+           cycleUsageSummary.status != .insufficientData {
+            return cycleUsageDetail(cycleUsageSummary)
         }
         guard learningDaysObserved > 0 else {
             return language == .spanish
@@ -598,6 +933,38 @@ final class BatteryViewModel: ObservableObject {
             : "Now: \(charge), \(state). There are \(learningDaysObserved) observed \(dayWord), but not enough power data for a trend yet."
     }
 
+    private func cycleUsageDetail(_ summary: CycleUsageSummary) -> String {
+        let usage = String(format: "%.0f%% (%.2f EFC)", summary.todayUsagePercent, summary.todayEquivalentCycles)
+        let rolling = String(format: "%.2f EFC", summary.rolling24HourEquivalentCycles)
+        let hardware = "+\(summary.rolling24HourHardwareCycleDelta)"
+        let absolutePaceIsElevated = summary.todayEquivalentCycles > 0.20
+            || summary.rolling24HourEquivalentCycles > 0.20
+
+        switch summary.status {
+        case .high:
+            return language == .spanish
+                ? "Hoy: \(usage); últimas 24 h: \(rolling), contador medido \(hardware). Ritmo alto de uso, no diagnóstico de daño."
+                : "Today: \(usage); last 24h: \(rolling), measured counter \(hardware). High usage pace, not a damage diagnosis."
+        case .elevated:
+            if absolutePaceIsElevated {
+                return language == .spanish
+                    ? "Hoy: \(usage); últimas 24 h: \(rolling). Supera el umbral absoluto del 20% de uso equivalente; revisa las apps antes de atribuirlo a desgaste."
+                    : "Today: \(usage); last 24h: \(rolling). It is above the absolute 20% equivalent-use threshold; review apps before attributing it to wear."
+            }
+            return language == .spanish
+                ? "Hoy: \(usage); últimas 24 h: \(rolling). El plan configurado está por encima de su presupuesto, aunque el uso absoluto sigue bajo."
+                : "Today: \(usage); last 24h: \(rolling). The configured plan is above budget, although absolute use remains low."
+        case .onTrack:
+            return language == .spanish
+                ? "Hoy: \(usage); últimas 24 h: \(rolling), contador medido \(hardware). Dentro del umbral absoluto del 20%; el baseline solo aporta contexto."
+                : "Today: \(usage); last 24h: \(rolling), measured counter \(hardware). Within the absolute 20% threshold; the baseline is context only."
+        case .insufficientData:
+            return language == .spanish
+                ? "Aún no hay datos suficientes para clasificar el ritmo de ciclos."
+                : "There is not enough data yet to classify cycle pace."
+        }
+    }
+
     private var learningAveragePowerWatts: Double? {
         let values = learningAggregates.compactMap(\.averageBatteryPowerWatts)
             .filter { $0.isFinite && abs($0) >= 0.05 }
@@ -618,7 +985,7 @@ final class BatteryViewModel: ObservableObject {
         if let dischargeRate = effectiveBatteryPercentPerMinute, dischargeRate >= 0.35 {
             return .attention
         }
-        if let cpu = system.cpuUsagePercent, cpu >= 90 {
+        if let cpu = system.cpuUsagePercent, cpu >= 80 {
             return .attention
         }
         if let memory = system.memoryUsedPercent, memory >= 90 {
@@ -627,10 +994,58 @@ final class BatteryViewModel: ObservableObject {
         if let disk = system.diskUsedPercent, disk >= 95 {
             return .attention
         }
-        if battery.externalPowerConnected && battery.isCharging {
+        if isBatteryUseCurrentlyPausedByExternalPower {
+            if isChargeLimitActive {
+                return .connectedNotCharging
+            }
             return .charging
         }
+        if cycleUsageSummary?.status == .high {
+            return .attention
+        }
+        if cycleUsageSummary?.status == .elevated {
+            return .elevated
+        }
+        if isChargeLimitActive {
+            return .connectedNotCharging
+        }
+        if battery.externalPowerConnected && (battery.isCharging || isChargingToLimit) {
+            return .charging
+        }
+        if battery.externalPowerConnected {
+            return .connectedNotCharging
+        }
         return .protected
+    }
+
+    var cycleUsageIsPrimaryStatus: Bool {
+        guard !isBatteryUseCurrentlyPausedByExternalPower else { return false }
+        guard let cycleStatus = cycleUsageSummary?.status,
+              cycleStatus == .elevated || cycleStatus == .high else {
+            return false
+        }
+        if system.thermalState == .serious || system.thermalState == .critical {
+            return false
+        }
+        if let temperature = battery.temperatureCelsius, temperature >= temperatureAlertCelsius {
+            return false
+        }
+        if let charge = battery.chargePercent, charge <= criticalChargePercent {
+            return false
+        }
+        if let dischargeRate = effectiveBatteryPercentPerMinute, dischargeRate >= 0.35 {
+            return false
+        }
+        if let cpu = system.cpuUsagePercent, cpu >= 80 {
+            return false
+        }
+        if let memory = system.memoryUsedPercent, memory >= 90 {
+            return false
+        }
+        if let disk = system.diskUsedPercent, disk >= 95 {
+            return false
+        }
+        return true
     }
 
     var statusTitle: String {
@@ -638,7 +1053,17 @@ final class BatteryViewModel: ObservableObject {
         case .protected:
             return copy(.protected)
         case .charging:
+            if let limit = chargeLimitPercent, isChargingToLimit {
+                return String(format: copy(.chargingToLimit), limit)
+            }
             return copy(.charging)
+        case .connectedNotCharging:
+            if let limit = chargeLimitPercent, isChargeLimitActive {
+                return String(format: copy(.chargeLimitActive), limit)
+            }
+            return copy(.connectedNotCharging)
+        case .elevated:
+            return language == .spanish ? "Uso elevado" : "Elevated use"
         case .attention:
             return copy(.attention)
         }
@@ -660,7 +1085,7 @@ final class BatteryViewModel: ObservableObject {
         if let charge = battery.chargePercent, charge <= criticalChargePercent {
             return String(format: copy(.criticalChargeAlert), charge, criticalChargePercent)
         }
-        if let cpu = system.cpuUsagePercent, cpu >= 90 {
+        if let cpu = system.cpuUsagePercent, cpu >= 80 {
             return String(format: copy(.cpuAlert), cpu)
         }
         if let memory = system.memoryUsedPercent, memory >= 90 {
@@ -669,20 +1094,70 @@ final class BatteryViewModel: ObservableObject {
         if let disk = system.diskUsedPercent, disk >= 95 {
             return String(format: copy(.diskAlert), disk)
         }
+        if !isBatteryUseCurrentlyPausedByExternalPower,
+           let cycleUsageSummary, cycleUsageSummary.status == .high {
+            return language == .spanish
+                ? String(
+                    format: "Uso alto: %.2f ciclos equivalentes y +%d ciclos medidos en las últimas 24 h. Esto indica ritmo alto, no daño confirmado.",
+                    cycleUsageSummary.rolling24HourEquivalentCycles,
+                    cycleUsageSummary.rolling24HourHardwareCycleDelta
+                )
+                : String(
+                    format: "High use: %.2f equivalent cycles and +%d measured cycles in the last 24h. This indicates a high pace, not confirmed damage.",
+                    cycleUsageSummary.rolling24HourEquivalentCycles,
+                    cycleUsageSummary.rolling24HourHardwareCycleDelta
+                )
+        }
+        if !isBatteryUseCurrentlyPausedByExternalPower,
+           let cycleUsageSummary, cycleUsageSummary.status == .elevated {
+            return language == .spanish
+                ? String(
+                    format: "Uso elevado: %.0f%% de una carga completa equivalente hoy. Revisa el ritmo y la proyección semanal.",
+                    cycleUsageSummary.todayUsagePercent
+                )
+                : String(
+                    format: "Elevated use: %.0f%% of a full-capacity equivalent today. Review the pace and weekly projection.",
+                    cycleUsageSummary.todayUsagePercent
+                )
+        }
+        if battery.externalPowerConnected,
+           isChargeLimitActive,
+           let limit = chargeLimitPercent {
+            return String(format: copy(.chargeLimitActiveExplanation), limit)
+        }
+        if battery.externalPowerConnected && isChargingToLimit,
+           let limit = chargeLimitPercent {
+            return String(format: copy(.chargingToLimitExplanation), limit)
+        }
         if battery.externalPowerConnected && battery.isCharging {
             return copy(.chargingExplanation)
+        }
+        if battery.externalPowerConnected {
+            return copy(.connectedNotChargingExplanation)
         }
         guard let weatherSnapshot else { return copy(.protectedExplanation) }
         return "\(copy(.protectedExplanation)) \(String(format: copy(.weatherContext), weatherSnapshot.temperatureCelsius, weatherSnapshot.conditionLabel(for: language)))"
     }
 
     var chargeStateLabel: String {
+        if let limit = chargeLimitPercent, isChargeLimitActive {
+            return String(format: copy(.chargeLimitActive), limit)
+        }
         if battery.isFullyCharged { return copy(.fullyCharged) }
+        if let limit = chargeLimitPercent, isChargingToLimit {
+            return String(format: copy(.chargingToLimit), limit)
+        }
         if battery.isCharging { return copy(.charging) }
+        if battery.externalPowerConnected { return copy(.connectedNotCharging) }
         return copy(.discharging)
     }
 
     var thermalStateLabel: String {
+        if system.thermalState == .nominal,
+           let cpu = system.cpuUsagePercent,
+           cpu >= 80 {
+            return language == .spanish ? "Carga alta" : "High load"
+        }
         switch (language, system.thermalState) {
         case (.spanish, .nominal): return "Normal"
         case (.spanish, .fair): return "Moderado"
@@ -695,6 +1170,34 @@ final class BatteryViewModel: ObservableObject {
         case (.english, .critical): return "Critical"
         case (.english, .unavailable): return "Unavailable"
         }
+    }
+
+    var thermalStateDetail: String {
+        switch (language, system.thermalState) {
+        case (.spanish, .nominal): return "Sin presión térmica"
+        case (.spanish, .fair): return "Presión leve"
+        case (.spanish, .serious): return "Presión térmica"
+        case (.spanish, .critical): return "Presión crítica"
+        case (.spanish, .unavailable): return "Sensor no disponible"
+        case (.english, .nominal): return "No thermal pressure"
+        case (.english, .fair): return "Light pressure"
+        case (.english, .serious): return "Thermal pressure"
+        case (.english, .critical): return "Critical pressure"
+        case (.english, .unavailable): return "Sensor unavailable"
+        }
+    }
+
+    var powerModeLabel: String {
+        system.lowPowerModeEnabled ? copy(.lowPower) : copy(.automaticPower)
+    }
+
+    var powerModeDetail: String {
+        if system.lowPowerModeEnabled {
+            return language == .spanish
+                ? "macOS está limitando el consumo"
+                : "macOS is limiting power use"
+        }
+        return copy(.powerModeUnavailable)
     }
 
     var learningProgress: Double {
@@ -815,8 +1318,17 @@ final class BatteryViewModel: ObservableObject {
             if includeSupportingData {
                 recentSamples = []
                 recentSessions = []
-                learningAggregates = []
-                processImpacts = []
+                processHistorySamples = []
+                alertEvents = []
+                intelligenceAnalysisLogs = []
+                hourlyAggregates = []
+                 learningAggregates = []
+                 learningHourlyAggregates = []
+                 cycleUsageQuarterHourBuckets = []
+                 cycleUsageDailyBuckets = []
+                 cycleUsageSummary = nil
+                 processImpacts = []
+
                 storeDiagnostics = nil
                 storedSampleCount = 0
                 learningDaysObserved = 0
@@ -832,6 +1344,7 @@ final class BatteryViewModel: ObservableObject {
             if includeSupportingData {
                 try? await coordinator.flush()
                 _ = try? await store.applyRetentionIfNeeded()
+                try await refreshCycleBudget(from: store, now: Date())
                 guard isCurrentRequest() else { return }
             }
 
@@ -852,20 +1365,43 @@ final class BatteryViewModel: ObservableObject {
 
             guard includeSupportingData else { return }
 
-            let sessionSince = Date().addingTimeInterval(-24 * 60 * 60)
-            let learnedSamples = try await store.fetchAggregates(
-                resolution: .day,
-                since: Date().addingTimeInterval(-7 * 86_400),
-                limit: 7
-            )
-            guard isCurrentRequest() else { return }
-            let evidence = try await store.sampleEvidence()
+             let sessionSince = Date().addingTimeInterval(-24 * 60 * 60)
+             let computerUseWindow = makeComputerUseWindow(
+                 for: requestedRange,
+                 endingOn: computerUseDate
+             )
+             let computerUseSamples = try await store.fetchAggregates(
+                 resolution: computerUseWindow.resolution,
+                 since: computerUseWindow.start,
+                 until: computerUseWindow.end,
+                 limit: computerUseWindow.limit
+             )
+             guard isCurrentRequest() else { return }
+
+             let learnedSamples = try await store.fetchAggregates(
+                 resolution: .day,
+                 since: Date().addingTimeInterval(-7 * 86_400),
+                 limit: 7
+             )
+             guard isCurrentRequest() else { return }
+             let learningHourlySamples = try await store.fetchAggregates(
+                 resolution: .minute,
+                 since: Date().addingTimeInterval(-7 * 86_400),
+                 limit: 10_000
+             )
+             guard isCurrentRequest() else { return }
+             let evidence = try await store.sampleEvidence()
+
             guard isCurrentRequest() else { return }
             storedSampleCount = evidence.sampleCount
             learningDaysObserved = evidence.observedDays
             learningFirstDate = evidence.firstSampleDate
             learningLastDate = evidence.lastSampleDate
-            let nextLearningAggregates = Array(learnedSamples.reversed())
+             let nextLearningAggregates = Array(learnedSamples.reversed())
+             let nextLearningHourlyAggregates = Array(learningHourlySamples.reversed())
+              let nextHourlyAggregates = Array(computerUseSamples.reversed())
+
+
             let nextRecentSamples = try await store.fetchBatterySamples(
                 since: Date().addingTimeInterval(-30 * 60),
                 limit: 60
@@ -873,10 +1409,40 @@ final class BatteryViewModel: ObservableObject {
             guard isCurrentRequest() else { return }
             let nextRecentSessions = try await store.fetchSessions(since: sessionSince, limit: 5)
             guard isCurrentRequest() else { return }
+            let nextProcessHistorySamples = try await store.fetchProcessSamples(
+                since: requestedRange.since ?? Date().addingTimeInterval(-7 * 86_400),
+                limit: requestedRange.duration == nil ? 10_000 : max(240, requestedRange.aggregateFetchLimit * 4)
+            )
+            guard isCurrentRequest() else { return }
+            let nextAlertEvents = try await store.fetchAlertEvents(
+                since: Date().addingTimeInterval(-30 * 86_400),
+                limit: 100
+            )
+            guard isCurrentRequest() else { return }
+            let fetchedIntelligenceAnalysisLogs = try await store.fetchIntelligenceAnalyses(
+                since: Date().addingTimeInterval(-365 * 86_400),
+                limit: 200
+            )
+            guard isCurrentRequest() else { return }
+            let nextIntelligenceAnalysisLogs = recoverInterruptedIntelligenceAnalyses(
+                fetchedIntelligenceAnalysisLogs
+            )
+            if lastAutomaticIntelligenceAnalysis == nil,
+               let latestAnalysis = nextIntelligenceAnalysisLogs.first(where: { $0.kind == .analysis }) {
+                lastAutomaticIntelligenceAnalysis = latestAnalysis.requestedAt
+                defaults.set(latestAnalysis.requestedAt, forKey: "cellium.intelligence.lastAnalysis")
+            }
             let nextDiagnostics = try await store.diagnostics()
             guard isCurrentRequest() else { return }
-            if learningAggregates != nextLearningAggregates {
-                learningAggregates = nextLearningAggregates
+             if learningAggregates != nextLearningAggregates {
+                 learningAggregates = nextLearningAggregates
+             }
+             if learningHourlyAggregates != nextLearningHourlyAggregates {
+                 learningHourlyAggregates = nextLearningHourlyAggregates
+             }
+             if hourlyAggregates != nextHourlyAggregates {
+
+                hourlyAggregates = nextHourlyAggregates
             }
             if recentSamples != nextRecentSamples {
                 recentSamples = nextRecentSamples
@@ -884,6 +1450,16 @@ final class BatteryViewModel: ObservableObject {
             if recentSessions != nextRecentSessions {
                 recentSessions = nextRecentSessions
             }
+            if processHistorySamples != nextProcessHistorySamples {
+                processHistorySamples = nextProcessHistorySamples
+            }
+            if alertEvents != nextAlertEvents {
+                alertEvents = nextAlertEvents
+            }
+            if intelligenceAnalysisLogs != nextIntelligenceAnalysisLogs {
+                intelligenceAnalysisLogs = nextIntelligenceAnalysisLogs
+            }
+            restoreLatestIntelligenceInsight(from: nextIntelligenceAnalysisLogs)
             if storeDiagnostics != nextDiagnostics {
                 storeDiagnostics = nextDiagnostics
             }
@@ -894,8 +1470,17 @@ final class BatteryViewModel: ObservableObject {
             if includeSupportingData {
                 recentSamples = []
                 recentSessions = []
-                learningAggregates = []
-                processImpacts = []
+                processHistorySamples = []
+                alertEvents = []
+                intelligenceAnalysisLogs = []
+                hourlyAggregates = []
+                 learningAggregates = []
+                 learningHourlyAggregates = []
+                 cycleUsageQuarterHourBuckets = []
+                 cycleUsageDailyBuckets = []
+                 cycleUsageSummary = nil
+                 processImpacts = []
+
                 storeDiagnostics = nil
                 storedSampleCount = 0
                 learningDaysObserved = 0
@@ -911,6 +1496,24 @@ final class BatteryViewModel: ObservableObject {
         }
     }
 
+    private func refreshCycleBudget(from store: SQLiteStore, now: Date) async throws {
+        let snapshot = try await cycleBudgetCoordinator.load(
+            from: store,
+            currentCycleCount: battery.cycleCount,
+            configuration: cyclePlanConfiguration,
+            now: now
+        )
+        if cycleUsageQuarterHourBuckets != snapshot.quarterHourBuckets {
+            cycleUsageQuarterHourBuckets = snapshot.quarterHourBuckets
+        }
+        if cycleUsageDailyBuckets != snapshot.dailyBuckets {
+            cycleUsageDailyBuckets = snapshot.dailyBuckets
+        }
+        if cycleUsageSummary != snapshot.summary {
+            cycleUsageSummary = snapshot.summary
+        }
+    }
+
     private func downsample(
         _ aggregates: [BatteryAggregate],
         maxCount: Int
@@ -922,22 +1525,954 @@ final class BatteryViewModel: ObservableObject {
             let position = Double(index) / denominator * Double(lastIndex)
             return aggregates[Int(position.rounded())]
         }
-    }
+     }
 
-    func setHistoryRange(_ range: HistoryRange) {
-        guard historyRange != range else { return }
-        historyRange = range
-        if panelVisible {
-            refreshHistory(includeSupportingData: false)
-        }
-    }
+     private func makeComputerUseWindow(
+         for range: HistoryRange,
+         endingOn date: Date
+     ) -> (
+         start: Date,
+         end: Date,
+         resolution: BatteryAggregateResolution,
+         limit: Int
+     ) {
+         let calendar = Calendar.autoupdatingCurrent
+         let dayStart = calendar.startOfDay(for: date)
+         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart)
+             ?? dayStart.addingTimeInterval(86_400)
 
-    func setHistoryMetric(_ metric: DashboardHistoryMetric) {
+         guard range.resolution != .day,
+               let duration = range.duration else {
+             return (dayStart, dayEnd, .minute, 1_500)
+         }
+
+         let start = calendar.date(
+             byAdding: .second,
+             value: -Int(duration),
+             to: dayEnd
+         ) ?? dayEnd.addingTimeInterval(-duration)
+         return (start, dayEnd, range.resolution, range.aggregateFetchLimit)
+     }
+
+      func setHistoryRange(_ range: HistoryRange) {
+
+          guard historyRange != range else { return }
+          historyRange = range
+          hourlyAggregates = []
+          defaults.set(range.rawValue, forKey: "cellium.historyRange")
+
+         if panelVisible {
+             refreshHistory(includeSupportingData: true)
+         }
+     }
+
+      var isComputerUseToday: Bool {
+          Calendar.autoupdatingCurrent.isDateInToday(computerUseDate)
+      }
+
+      var computerUseDisplayWindow: (start: Date, end: Date) {
+          let window = makeComputerUseWindow(
+              for: historyRange,
+              endingOn: computerUseDate
+          )
+          return (window.start, window.end)
+      }
+
+      func setComputerUseDate(_ date: Date) {
+
+         let calendar = Calendar.autoupdatingCurrent
+         let normalizedDate = calendar.startOfDay(for: date)
+         let today = calendar.startOfDay(for: Date())
+         guard normalizedDate <= today, normalizedDate != computerUseDate else { return }
+
+         computerUseDate = normalizedDate
+         hourlyAggregates = []
+         if panelVisible {
+             refreshHistory(includeSupportingData: true)
+         }
+     }
+
+     func moveComputerUseDate(by days: Int) {
+         guard days != 0,
+               let date = Calendar.autoupdatingCurrent.date(
+                   byAdding: .day,
+                   value: days,
+                   to: computerUseDate
+               ) else {
+             return
+         }
+         setComputerUseDate(date)
+     }
+
+     func setHistoryMetric(_ metric: DashboardHistoryMetric) {
+
         historyMetric = metric
     }
 
     func setShowingSettings(_ showing: Bool) {
         showingSettings = showing
+        if showing {
+            showingAgent = false
+        }
+    }
+
+    func setShowingAgent(_ showing: Bool) {
+        showingAgent = showing
+        guard showing else { return }
+        showingSettings = false
+        refreshLocalIntelligenceInsight()
+    }
+
+    func createAgentSession() {
+        persistIntelligenceMessages()
+        activeIntelligenceSessionID = nil
+        intelligenceMessages = []
+        intelligenceError = nil
+    }
+
+    private func ensureActiveAgentSession() {
+        guard activeIntelligenceSessionID == nil else { return }
+        let title = language == .spanish ? "Nuevo chat" : "New chat"
+        let session = CelliumAgentSession(title: title)
+        intelligenceSessions.insert(session, at: 0)
+        activeIntelligenceSessionID = session.id
+    }
+
+    func selectAgentSession(_ sessionID: UUID) {
+        guard sessionID != activeIntelligenceSessionID,
+              let session = intelligenceSessions.first(where: { $0.id == sessionID }) else {
+            return
+        }
+        persistIntelligenceMessages()
+        activeIntelligenceSessionID = session.id
+        intelligenceMessages = session.messages
+        intelligenceError = nil
+    }
+
+    func deleteAgentSession(_ sessionID: UUID) {
+        guard let index = intelligenceSessions.firstIndex(where: { $0.id == sessionID }) else { return }
+        let wasActive = activeIntelligenceSessionID == sessionID
+        intelligenceSessions.remove(at: index)
+
+        if wasActive {
+            if let replacement = intelligenceSessions.first {
+                activeIntelligenceSessionID = replacement.id
+                intelligenceMessages = replacement.messages
+            } else {
+                activeIntelligenceSessionID = nil
+                intelligenceMessages = []
+            }
+            intelligenceError = nil
+        }
+        persistIntelligenceSessions()
+    }
+
+    func setIntelligenceEnabled(_ enabled: Bool) {
+        intelligenceConfiguration.enabled = enabled
+        defaults.set(enabled, forKey: "cellium.intelligence.enabled")
+        intelligenceError = nil
+        intelligenceValidationMessage = nil
+        refreshLocalIntelligenceInsight()
+        if enabled {
+            refreshIntelligenceAPIKeyState()
+        } else {
+            intelligenceInsight = localIntelligenceInsight
+        }
+    }
+
+    func setIntelligenceProvider(_ provider: IntelligenceProvider) {
+        intelligenceConfiguration.provider = provider
+        defaults.set(provider.rawValue, forKey: "cellium.intelligence.provider")
+        intelligenceValidationMessage = nil
+        refreshIntelligenceAPIKeyState()
+    }
+
+    func setIntelligenceModel(_ model: String) {
+        intelligenceConfiguration.model = model
+        defaults.set(model, forKey: "cellium.intelligence.model")
+        intelligenceValidationMessage = nil
+    }
+
+    func setIntelligenceAutomaticAnalysisEnabled(_ enabled: Bool) {
+        intelligenceConfiguration.automaticAnalysisEnabled = enabled
+        defaults.set(enabled, forKey: "cellium.intelligence.automatic")
+        if !enabled {
+            lastAutomaticIntelligenceAnalysis = nil
+            defaults.removeObject(forKey: "cellium.intelligence.lastAnalysis")
+        }
+    }
+
+    func setOllamaEndpoint(_ endpoint: String) {
+        intelligenceConfiguration.ollamaEndpoint = endpoint
+        defaults.set(endpoint, forKey: "cellium.intelligence.ollamaEndpoint")
+        intelligenceValidationMessage = nil
+    }
+
+    func unlockIntelligenceSecrets() {
+        let provider = intelligenceConfiguration.provider
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                intelligenceAPIKeyConfigured = try await intelligenceService.unlockAPIKey(
+                    for: provider
+                )
+                intelligenceError = intelligenceAPIKeyConfigured
+                    ? nil
+                    : (language == .spanish ? "No hay una API key cifrada para desbloquear." : "No encrypted API key is available to unlock.")
+                intelligenceValidationMessage = nil
+            } catch {
+                intelligenceAPIKeyConfigured = false
+                intelligenceError = intelligenceErrorMessage(error)
+            }
+        }
+    }
+
+    func saveIntelligenceAPIKey(_ value: String) {
+        let provider = intelligenceConfiguration.provider
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await intelligenceService.saveAPIKey(value, for: provider)
+                intelligenceAPIKeyConfigured = await intelligenceService.hasAPIKey(for: provider)
+                intelligenceError = nil
+                intelligenceValidationMessage = nil
+            } catch {
+                intelligenceError = intelligenceErrorMessage(error)
+            }
+        }
+    }
+
+    func clearIntelligenceAPIKey() {
+        let provider = intelligenceConfiguration.provider
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await intelligenceService.deleteAPIKey(for: provider)
+                intelligenceAPIKeyConfigured = false
+                intelligenceError = nil
+                intelligenceValidationMessage = nil
+            } catch {
+                intelligenceError = intelligenceErrorMessage(error)
+            }
+        }
+    }
+
+    func clearAlerts() {
+        alertEvents = []
+        proactiveAlert = nil
+        lastProactiveAlertKey = nil
+        lastProactiveAlertDate = nil
+        Task {
+            try? await store?.clearAlertEvents()
+        }
+    }
+
+    func clearIntelligenceAnalysisLog() {
+        intelligenceAnalysisLogs = []
+        Task {
+            try? await store?.clearIntelligenceAnalyses()
+        }
+    }
+
+     func requestIntelligenceAnalysis() {
+         refreshLocalIntelligenceInsight()
+         wifiAvailable = wifiMonitor.isWiFiAvailable
+         guard wifiAvailable else {
+             intelligenceError = nil
+             return
+         }
+         guard isIntelligenceReady else {
+
+            intelligenceError = language == .spanish
+                ? (intelligenceConfiguration.enabled
+                    ? "Configura un proveedor antes de solicitar un análisis."
+                    : "Activa y configura el agente para solicitar un análisis.")
+                : (intelligenceConfiguration.enabled
+                    ? "Configure a provider before requesting an analysis."
+                    : "Enable and configure the agent before requesting an analysis.")
+            return
+        }
+        guard !isGeneratingIntelligence else { return }
+
+        let configuration = intelligenceConfiguration
+        let evidence = makeIntelligenceEvidence()
+        let languageCode = language.rawValue
+        let runID = UUID()
+        let requestedAt = Date()
+        lastAutomaticIntelligenceAnalysis = requestedAt
+        defaults.set(requestedAt, forKey: "cellium.intelligence.lastAnalysis")
+        activeIntelligenceRunID = runID
+        let runningLog = StoredIntelligenceAnalysis(
+            id: runID,
+            requestedAt: requestedAt,
+            kind: .analysis,
+            provider: configuration.provider.rawValue,
+            model: configuration.model,
+            languageCode: languageCode,
+            prompt: language == .spanish ? "Preparando el prompt…" : "Preparing prompt…",
+            status: .running
+        )
+        upsertIntelligenceAnalysis(runningLog)
+         persistIntelligenceAnalysis(runningLog, updating: false)
+         isGeneratingAnalysis = true
+         isGeneratingIntelligence = true
+         intelligenceError = nil
+        Task { @MainActor [weak self] in
+             guard let self else { return }
+             defer {
+                 isGeneratingAnalysis = false
+                 isGeneratingIntelligence = false
+                 if activeIntelligenceRunID == runID {
+                    activeIntelligenceRunID = nil
+                }
+            }
+            do {
+                let result = try await intelligenceService.generateAnalysis(
+                    from: evidence,
+                    configuration: configuration,
+                    languageCode: languageCode
+                )
+                intelligenceInsight = result.insight
+                let completedLog = StoredIntelligenceAnalysis(
+                    id: runID,
+                    requestedAt: requestedAt,
+                    completedAt: Date(),
+                    kind: .analysis,
+                    provider: configuration.provider.rawValue,
+                    model: configuration.model,
+                    languageCode: languageCode,
+                    prompt: result.prompt,
+                    response: result.response,
+                    status: .succeeded,
+                    title: result.insight.title,
+                    severity: result.insight.severity.rawValue,
+                    confidence: result.insight.confidence.rawValue,
+                    evidence: result.insight.evidence,
+                    recommendations: result.insight.recommendations
+                )
+                 upsertIntelligenceAnalysis(completedLog)
+                 persistIntelligenceAnalysis(completedLog, updating: true)
+                 publishIntelligenceActionIfNeeded(result)
+                 intelligenceError = nil
+             } catch {
+
+                let message = intelligenceErrorMessage(error)
+                let failedLog = StoredIntelligenceAnalysis(
+                    id: runID,
+                    requestedAt: requestedAt,
+                    completedAt: Date(),
+                    kind: .analysis,
+                    provider: configuration.provider.rawValue,
+                    model: configuration.model,
+                    languageCode: languageCode,
+                    prompt: language == .spanish
+                        ? "La solicitud se inició, pero no se obtuvo el prompt final antes del fallo."
+                        : "The request started, but the final prompt was unavailable before the failure.",
+                    status: .failed,
+                    errorMessage: message
+                )
+                upsertIntelligenceAnalysis(failedLog)
+                persistIntelligenceAnalysis(failedLog, updating: true)
+                intelligenceError = message
+                intelligenceInsight = localIntelligenceInsight
+            }
+        }
+    }
+
+     func sendAgentMessage(_ text: String) {
+         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+         guard !trimmedText.isEmpty else { return }
+         wifiAvailable = wifiMonitor.isWiFiAvailable
+         guard wifiAvailable else {
+             intelligenceError = language == .spanish
+                 ? "No se pudo enviar el mensaje porque no hay Wi-Fi."
+                 : "The message could not be sent because Wi-Fi is unavailable."
+             return
+         }
+         guard isIntelligenceReady else {
+
+            intelligenceError = language == .spanish
+                ? (intelligenceConfiguration.enabled
+                    ? "Configura un proveedor antes de chatear."
+                    : "Activa y configura el agente en Configuración para chatear.")
+                : (intelligenceConfiguration.enabled
+                    ? "Configure a provider before chatting."
+                    : "Enable and configure the agent in Settings to chat.")
+            return
+        }
+        guard !isGeneratingIntelligence else { return }
+
+        ensureActiveAgentSession()
+        let configuration = intelligenceConfiguration
+         let evidence = makeIntelligenceEvidence()
+         let languageCode = language.rawValue
+         let history = Array(intelligenceMessages.suffix(10))
+         let runID = UUID()
+
+        let requestedAt = Date()
+        activeIntelligenceRunID = runID
+        let runningLog = StoredIntelligenceAnalysis(
+            id: runID,
+            requestedAt: requestedAt,
+            kind: .chat,
+            provider: configuration.provider.rawValue,
+            model: configuration.model,
+            languageCode: languageCode,
+            prompt: trimmedText,
+            status: .running
+        )
+        upsertIntelligenceAnalysis(runningLog)
+        persistIntelligenceAnalysis(runningLog, updating: false)
+        intelligenceMessages.append(
+            AgentChatMessage(role: .user, content: trimmedText)
+        )
+        persistIntelligenceMessages()
+        isGeneratingIntelligence = true
+        intelligenceError = nil
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                isGeneratingIntelligence = false
+                if activeIntelligenceRunID == runID {
+                    activeIntelligenceRunID = nil
+                }
+            }
+            do {
+                let result = try await intelligenceService.chatAnalysis(
+                    message: trimmedText,
+                    history: history,
+                    evidence: evidence,
+                    configuration: configuration,
+                    languageCode: languageCode
+                )
+                intelligenceMessages.append(
+                    AgentChatMessage(role: .assistant, content: result.response)
+                )
+                persistIntelligenceMessages()
+                let completedLog = StoredIntelligenceAnalysis(
+                    id: runID,
+                    requestedAt: requestedAt,
+                    completedAt: Date(),
+                    kind: .chat,
+                    provider: configuration.provider.rawValue,
+                    model: configuration.model,
+                    languageCode: result.languageCode,
+                    prompt: result.prompt,
+                    response: result.response,
+                    status: .succeeded
+                )
+                upsertIntelligenceAnalysis(completedLog)
+                persistIntelligenceAnalysis(completedLog, updating: true)
+            } catch {
+                let message = intelligenceErrorMessage(error)
+                let failedLog = StoredIntelligenceAnalysis(
+                    id: runID,
+                    requestedAt: requestedAt,
+                    completedAt: Date(),
+                    kind: .chat,
+                    provider: configuration.provider.rawValue,
+                    model: configuration.model,
+                    languageCode: languageCode,
+                    prompt: trimmedText,
+                    status: .failed,
+                    errorMessage: message
+                )
+                upsertIntelligenceAnalysis(failedLog)
+                persistIntelligenceAnalysis(failedLog, updating: true)
+                intelligenceError = message
+            }
+        }
+    }
+
+     func clearAgentHistory() {
+         intelligenceMessages = []
+         intelligenceError = nil
+         persistIntelligenceMessages()
+     }
+
+
+     func validateIntelligenceProvider() {
+         guard !isValidatingIntelligenceProvider else { return }
+         wifiAvailable = wifiMonitor.isWiFiAvailable
+         guard wifiAvailable else {
+             intelligenceValidationMessage = copy(.wifiUnavailable)
+             return
+         }
+         let configuration = intelligenceConfiguration
+
+        isValidatingIntelligenceProvider = true
+        intelligenceValidationMessage = nil
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { isValidatingIntelligenceProvider = false }
+            do {
+                try await intelligenceService.validateProvider(configuration)
+                intelligenceValidationMessage = language == .spanish ? "Proveedor disponible" : "Provider available"
+            } catch {
+                intelligenceValidationMessage = intelligenceErrorMessage(error)
+            }
+        }
+    }
+
+    private func upsertIntelligenceAnalysis(_ analysis: StoredIntelligenceAnalysis) {
+        if let index = intelligenceAnalysisLogs.firstIndex(where: { $0.id == analysis.id }) {
+            intelligenceAnalysisLogs[index] = analysis
+        } else {
+            intelligenceAnalysisLogs.insert(analysis, at: 0)
+        }
+        intelligenceAnalysisLogs.sort { $0.requestedAt > $1.requestedAt }
+    }
+
+    private func recoverInterruptedIntelligenceAnalyses(
+        _ logs: [StoredIntelligenceAnalysis]
+    ) -> [StoredIntelligenceAnalysis] {
+        let recoveredAt = Date()
+        return logs.map { log in
+            guard log.status == .running, log.id != activeIntelligenceRunID else {
+                return log
+            }
+
+            let message = language == .spanish
+                ? "La aplicación no terminó esta solicitud; se marcó como fallida para evitar un estado atascado."
+                : "The app did not finish this request; it was marked failed to avoid a stuck state."
+            let recovered = StoredIntelligenceAnalysis(
+                id: log.id,
+                requestedAt: log.requestedAt,
+                completedAt: recoveredAt,
+                kind: log.kind,
+                provider: log.provider,
+                model: log.model,
+                languageCode: log.languageCode,
+                prompt: log.prompt,
+                response: log.response,
+                status: .failed,
+                errorMessage: message,
+                title: log.title,
+                severity: log.severity,
+                confidence: log.confidence,
+                evidence: log.evidence,
+                recommendations: log.recommendations
+            )
+            persistIntelligenceAnalysis(recovered, updating: true)
+            return recovered
+        }
+    }
+
+     private func persistIntelligenceAnalysis(
+         _ analysis: StoredIntelligenceAnalysis,
+         updating: Bool
+     ) {
+         guard let store else { return }
+         Task {
+             do {
+                 if updating {
+                     try await store.updateIntelligenceAnalysis(analysis)
+                 } else {
+                     _ = try await store.appendIntelligenceAnalysis(analysis)
+                 }
+             } catch {
+                 // The in-memory log remains visible even if local persistence is unavailable.
+             }
+         }
+     }
+
+     private func publishIntelligenceActionIfNeeded(_ result: IntelligenceAnalysisResult) {
+         guard result.actionRequired,
+                let action = result.actionMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+                !action.isEmpty,
+                learningDaysObserved >= 7 || cycleUsageSummary?.isActionableHighPace == true,
+                wifiAvailable else {
+             return
+         }
+
+         let actionKey = action.lowercased()
+         let now = Date()
+         if actionKey == lastIntelligenceActionNotificationKey,
+            let lastDate = lastIntelligenceActionNotificationDate,
+            now.timeIntervalSince(lastDate) < 24 * 60 * 60 {
+             return
+         }
+
+         lastIntelligenceActionNotificationKey = actionKey
+         lastIntelligenceActionNotificationDate = now
+         defaults.set(actionKey, forKey: "cellium.intelligence.lastActionNotificationKey")
+         defaults.set(now, forKey: "cellium.intelligence.lastActionNotificationDate")
+
+         var measurements = ["learningDays": Double(learningDaysObserved)]
+         if let averagePower = learningAveragePowerWatts {
+             measurements["averagePowerWatts"] = averagePower
+         }
+         let alert = ProactiveAlert(
+             identifier: "intelligence-learning-action",
+             title: copy(.alertLearningActionTitle),
+             body: action,
+             severity: .warning,
+             measurements: measurements
+         )
+         proactiveAlert = alert
+         lastProactiveAlertKey = alert.identifier
+         lastProactiveAlertDate = now
+         persistAlertEvent(alert, occurredAt: now)
+         onProactiveAlert?(alert)
+     }
+
+     private func intelligenceErrorMessage(_ error: Error) -> String {
+
+        if let urlError = error as? URLError, urlError.code == .timedOut {
+            return language == .spanish
+                ? "El proveedor no respondió a tiempo. El análisis se detuvo y quedó registrado."
+                : "The provider did not respond in time. The analysis stopped and was logged."
+        }
+        guard language == .spanish else { return error.localizedDescription }
+        guard let intelligenceError = error as? IntelligenceError else {
+            return error.localizedDescription
+        }
+        switch intelligenceError {
+        case .missingAPIKey:
+            return "No hay una API key de OpenRouter configurada."
+        case .invalidEndpoint:
+            return "La dirección de Ollama no es válida."
+        case .emptyPrompt:
+            return "El mensaje no puede estar vacío."
+        case .emptyResponse:
+            return "El proveedor devolvió una respuesta vacía."
+        case .invalidResponse:
+            return "El proveedor devolvió una respuesta no válida."
+        case let .httpStatus(status):
+            return "El proveedor de IA respondió con el estado HTTP \(status)."
+        case .secretPassphraseRequired:
+            return "No se pudo crear la clave local segura para la API key."
+        case .secretPassphraseInvalid:
+            return "La API key cifrada no se puede desbloquear en esta instalación."
+        case .secretStore:
+            return "No se pudo abrir el archivo cifrado de credenciales."
+        case .timedOut:
+            return "El proveedor no respondió a tiempo. El análisis se detuvo y quedó registrado."
+        }
+    }
+
+    private func refreshIntelligenceAPIKeyState() {
+        let provider = intelligenceConfiguration.provider
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            intelligenceAPIKeyConfigured = await intelligenceService.hasAPIKey(for: provider)
+        }
+    }
+
+    private func refreshLocalIntelligenceInsight() {
+        let insight = BatteryInsightEngine.makeInsight(
+            from: makeIntelligenceEvidence(),
+            languageCode: language.rawValue
+        )
+        localIntelligenceInsight = insight
+        let deterministicCycleSignal = cycleUsageSummary?.status == .elevated
+            || cycleUsageSummary?.status == .high
+        if deterministicCycleSignal
+            || !intelligenceConfiguration.enabled
+            || intelligenceInsight?.provider == nil {
+            intelligenceInsight = insight
+        }
+    }
+
+    private func restoreLatestIntelligenceInsight(from logs: [StoredIntelligenceAnalysis]) {
+        if cycleUsageSummary?.status == .elevated || cycleUsageSummary?.status == .high {
+            refreshLocalIntelligenceInsight()
+            return
+        }
+        guard let latest = logs.first(where: {
+            $0.kind == .analysis &&
+                $0.status == .succeeded &&
+                $0.languageCode.lowercased().hasPrefix(language.rawValue)
+        }),
+        let title = latest.title,
+        let severity = latest.severity.flatMap(BatteryInsightSeverity.init(rawValue:)),
+        let confidence = latest.confidence.flatMap(Confidence.init(rawValue:)),
+        let provider = IntelligenceProvider(rawValue: latest.provider),
+        let response = latest.response else {
+            return
+        }
+
+        intelligenceInsight = BatteryInsight(
+            generatedAt: latest.completedAt ?? latest.requestedAt,
+            title: title,
+            summary: response,
+            severity: severity,
+            confidence: confidence,
+            evidence: latest.evidence,
+            recommendations: latest.recommendations,
+            provider: provider
+        )
+    }
+
+    private func startIntelligenceMonitoring() {
+        intelligenceTask?.cancel()
+        refreshIntelligenceAPIKeyState()
+        intelligenceTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                wifiAvailable = wifiMonitor.isWiFiAvailable
+                let lastAnalysisAt = lastAutomaticIntelligenceAnalysis
+                    ?? intelligenceAnalysisLogs.first(where: { $0.kind == .analysis })?.requestedAt
+                if isIntelligenceReady,
+                    intelligenceConfiguration.automaticAnalysisEnabled,
+                    wifiAvailable,
+                    !isGeneratingIntelligence,
+                    (lastAnalysisAt == nil || Date().timeIntervalSince(lastAnalysisAt ?? .distantPast) >= 3_600) {
+                    requestIntelligenceAnalysis()
+                }
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+            }
+        }
+    }
+
+    private func makeIntelligenceEvidence() -> BatteryEvidenceSnapshot {
+        let capturedAt = Date()
+        let recentHistory = recentSamples.prefix(60).map { sample in
+            BatteryEvidencePoint(
+                timestamp: sample.battery.timestamp,
+                chargePercent: sample.battery.chargePercent,
+                powerWatts: powerWatts(for: sample.battery),
+                temperatureCelsius: sample.battery.temperatureCelsius
+            )
+        }
+        let processEvidence = processImpacts.prefix(6).enumerated().map { index, impact in
+            ProcessEvidence(
+                name: "\(impact.kind.rawValue)-\(index + 1)",
+                kind: impact.kind.rawValue,
+                cpuPercent: impact.averageCPUPercent,
+                memoryPercent: impact.memoryPercent,
+                estimatedBatteryPercentPerMinute: impact.estimatedBatteryPercentPerMinute
+            )
+        }
+        return BatteryEvidenceSnapshot(
+             capturedAt: capturedAt,
+            chargePercent: battery.chargePercent,
+            isCharging: battery.isCharging,
+            externalPowerConnected: battery.externalPowerConnected,
+            powerWatts: batteryPowerWatts,
+            dischargePercentPerMinute: effectiveBatteryPercentPerMinute,
+            temperatureCelsius: battery.temperatureCelsius,
+            healthPercent: healthPercent,
+            cycleCount: battery.cycleCount,
+            designCycleCount: battery.designCycleCount,
+            thermalState: system.thermalState,
+            lowPowerModeEnabled: system.lowPowerModeEnabled,
+            cpuUsagePercent: system.cpuUsagePercent,
+             memoryUsedPercent: system.memoryUsedPercent,
+             diskUsedPercent: system.diskUsedPercent,
+             learningDaysObserved: learningDaysObserved,
+             recentHistory: recentHistory,
+             processImpacts: processEvidence,
+             context: makeIntelligenceContext(at: capturedAt),
+             cycleUsage: cycleUsageSummary,
+             chargeLimitPercent: chargeLimitPercent,
+             isChargeLimitActive: isChargeLimitActive,
+             batteryUsePausedByExternalPower: isBatteryUseCurrentlyPausedByExternalPower
+           )
+      }
+
+      private func makeIntelligenceContext(at capturedAt: Date) -> IntelligenceContext {
+          let (timeZone, timeZoneSource) = intelligenceTimeZone()
+          let device = IntelligenceDeviceContext(
+              modelIdentifier: macModelIdentifier(),
+              operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
+              architecture: machineArchitecture(),
+              appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+          )
+          let weather = weatherSnapshot.map {
+              IntelligenceWeatherContext(
+                  locationLabel: $0.locationLabel,
+                  timezoneIdentifier: $0.timezoneIdentifier,
+                  condition: $0.conditionLabel(for: language),
+                 temperatureCelsius: $0.temperatureCelsius,
+                 apparentTemperatureCelsius: $0.apparentTemperatureCelsius,
+                 relativeHumidityPercent: $0.relativeHumidity,
+                 windSpeedKmh: $0.windSpeedKmh
+             )
+         }
+         let weeklyAggregates = Array(learningAggregates.suffix(7))
+         let weeklyDays = weeklyAggregates.map {
+             IntelligenceLearningDay(
+                 date: $0.bucketStart,
+                 sampleCount: $0.sampleCount,
+                 averageChargePercent: $0.averageChargePercent,
+                 averageBatteryPowerWatts: $0.averageBatteryPowerWatts,
+                 averageTemperatureCelsius: $0.averageTemperatureCelsius,
+                 averageCPUUsagePercent: $0.averageCPUUsagePercent,
+                 averageMemoryUsedPercent: $0.averageMemoryUsedPercent
+             )
+         }
+         let weeklyLearning = IntelligenceLearningContext(
+             windowDays: 7,
+             observedDays: min(7, learningDaysObserved),
+             sampleCount: weeklyAggregates.reduce(0) { $0 + $1.sampleCount },
+             firstSampleDate: weeklyAggregates.first?.bucketStart ?? learningFirstDate,
+             lastSampleDate: weeklyAggregates.last?.bucketStart ?? learningLastDate,
+             averageBatteryPowerWatts: average(weeklyAggregates.compactMap(\.averageBatteryPowerWatts)),
+             averageChargePercent: average(weeklyAggregates.compactMap(\.averageChargePercent)),
+             averageTemperatureCelsius: average(weeklyAggregates.compactMap(\.averageTemperatureCelsius)),
+             averageCPUUsagePercent: average(weeklyAggregates.compactMap(\.averageCPUUsagePercent)),
+             averageMemoryUsedPercent: average(weeklyAggregates.compactMap(\.averageMemoryUsedPercent)),
+              days: weeklyDays
+          )
+          return IntelligenceContext(
+              device: device,
+              weather: weather,
+              weeklyLearning: weeklyLearning,
+              time: makeIntelligenceTimeContext(
+                  at: capturedAt,
+                  timeZone: timeZone,
+                  source: timeZoneSource
+              ),
+              usage: makeIntelligenceUsageContext(timeZone: timeZone)
+          )
+      }
+
+      private func intelligenceTimeZone() -> (timeZone: TimeZone, source: String) {
+          if let identifier = weatherSnapshot?.timezoneIdentifier,
+             let timeZone = TimeZone(identifier: identifier) {
+              return (timeZone, "weather-location")
+          }
+          return (.autoupdatingCurrent, "macOS")
+      }
+
+      private func makeIntelligenceTimeContext(
+          at date: Date,
+          timeZone: TimeZone,
+          source: String
+      ) -> IntelligenceTimeContext {
+          var calendar = Calendar(identifier: .gregorian)
+          calendar.timeZone = timeZone
+          let formatter = DateFormatter()
+          formatter.calendar = calendar
+          formatter.locale = Locale(identifier: "en_US_POSIX")
+          formatter.timeZone = timeZone
+          formatter.dateFormat = "yyyy-MM-dd HH:mm:ss zzz"
+          return IntelligenceTimeContext(
+              localDateTime: formatter.string(from: date),
+              timeZoneIdentifier: timeZone.identifier,
+              utcOffsetMinutes: timeZone.secondsFromGMT(for: date) / 60,
+              localHour: calendar.component(.hour, from: date),
+              dayOfWeek: calendar.component(.weekday, from: date),
+              isDaylightSavingTime: timeZone.isDaylightSavingTime(for: date),
+              source: source
+          )
+      }
+
+      private func makeIntelligenceUsageContext(timeZone: TimeZone) -> IntelligenceUsageContext? {
+          guard !learningHourlyAggregates.isEmpty else { return nil }
+          var calendar = Calendar(identifier: .gregorian)
+          calendar.timeZone = timeZone
+          let grouped = Dictionary(grouping: learningHourlyAggregates) { aggregate in
+              IntelligenceUsageBucketKey(
+                  day: calendar.startOfDay(for: aggregate.bucketStart),
+                  hour: calendar.component(.hour, from: aggregate.bucketStart)
+              )
+          }
+          let summaries = grouped.values.compactMap { aggregates -> IntelligenceUsageBucketSummary? in
+              guard let first = aggregates.first else { return nil }
+              let cpu = average(aggregates.compactMap(\.averageCPUUsagePercent))
+              let memory = average(aggregates.compactMap(\.averageMemoryUsedPercent))
+              guard cpu != nil || memory != nil else { return nil }
+              return IntelligenceUsageBucketSummary(
+                  key: IntelligenceUsageBucketKey(
+                      day: calendar.startOfDay(for: first.bucketStart),
+                      hour: calendar.component(.hour, from: first.bucketStart)
+                  ),
+                  activityScore: usageActivityScore(cpuPercent: cpu, memoryPercent: memory),
+                  cpuPercent: cpu,
+                  memoryPercent: memory
+              )
+          }
+          guard !summaries.isEmpty else { return nil }
+
+          let dayGroups = Dictionary(grouping: summaries, by: \.key.day)
+          let activeHoursPerDay = dayGroups.values.map { day in
+              Double(day.filter { ($0.activityScore ?? 0) >= 0.15 }.count)
+          }
+          let hourlyGroups = Dictionary(grouping: summaries, by: \.key.hour)
+          let hourlyProfile = hourlyGroups.keys.sorted().compactMap { hour -> IntelligenceUsageHour? in
+              guard let values = hourlyGroups[hour], !values.isEmpty else { return nil }
+              let averageScore = average(values.compactMap(\.activityScore))
+              return IntelligenceUsageHour(
+                  localHour: hour,
+                  observedDays: Set(values.map(\.key.day)).count,
+                  activeDays: values.filter { ($0.activityScore ?? 0) >= 0.15 }.count,
+                  averageActivityScore: averageScore,
+                  averageCPUPercent: average(values.compactMap(\.cpuPercent)),
+                  averageMemoryUsedPercent: average(values.compactMap(\.memoryPercent))
+              )
+          }
+          let activeProfile = hourlyProfile.filter { ($0.averageActivityScore ?? 0) >= 0.15 }
+          let peakHour = hourlyProfile.max {
+              ($0.averageActivityScore ?? 0) < ($1.averageActivityScore ?? 0)
+          }?.localHour
+          return IntelligenceUsageContext(
+              windowDays: 7,
+              observedDays: min(7, max(learningDaysObserved, dayGroups.count)),
+              sampleCount: learningHourlyAggregates.reduce(0) { $0 + $1.sampleCount },
+              averageActiveHoursPerDay: average(activeHoursPerDay),
+              typicalStartLocalHour: activeProfile.map(\.localHour).min(),
+              typicalEndLocalHour: activeProfile.map(\.localHour).max(),
+              peakLocalHour: peakHour,
+              hourlyProfile: hourlyProfile
+          )
+      }
+
+      private func usageActivityScore(cpuPercent: Double?, memoryPercent: Double?) -> Double? {
+          let cpu = cpuPercent.map { min(1, max(0, $0 / 100)) }
+          let memory = memoryPercent.map { min(1, max(0, $0 / 100)) }
+          switch (cpu, memory) {
+          case let (.some(cpu), .some(memory)):
+              return cpu * 0.6 + memory * 0.4
+          case let (.some(cpu), nil):
+              return cpu
+          case let (nil, .some(memory)):
+              return memory
+          case (nil, nil):
+              return nil
+          }
+      }
+
+     private func average(_ values: [Double]) -> Double? {
+         let finiteValues = values.filter { $0.isFinite }
+         guard !finiteValues.isEmpty else { return nil }
+         return finiteValues.reduce(0, +) / Double(finiteValues.count)
+     }
+
+     private func macModelIdentifier() -> String? {
+         var size = 0
+         guard sysctlbyname("hw.model", nil, &size, nil, 0) == 0, size > 0 else {
+             return nil
+         }
+         var buffer = [CChar](repeating: 0, count: size)
+         let result = buffer.withUnsafeMutableBytes { bytes in
+             sysctlbyname("hw.model", bytes.baseAddress, &size, nil, 0)
+         }
+         guard result == 0 else { return nil }
+         let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+         return String(decoding: bytes, as: UTF8.self)
+     }
+
+     private func machineArchitecture() -> String {
+         #if arch(arm64)
+         return "arm64"
+         #elseif arch(x86_64)
+         return "x86_64"
+         #else
+         return "unknown"
+         #endif
+     }
+
+     private func powerWatts(for snapshot: BatterySnapshot) -> Double? {
+
+        guard let watts = BatteryMath.batteryPowerWatts(
+            voltageMillivolts: snapshot.voltageMillivolts,
+            signedAmperageMilliamps: snapshot.amperageMilliamps
+        ), abs(watts) >= 0.05 else {
+            return nil
+        }
+        return watts
     }
 
     func setUpdateCheckEnabled(_ enabled: Bool) {
@@ -1041,6 +2576,13 @@ final class BatteryViewModel: ObservableObject {
         defaults.set(language.rawValue, forKey: "cellium.language")
         weatherCoordinator.setLanguage(language)
         syncWeatherState()
+        refreshLocalIntelligenceInsight()
+        if let latest = latestIntelligenceAnalysis,
+           latest.languageCode.lowercased().hasPrefix(language.rawValue) {
+            restoreLatestIntelligenceInsight(from: intelligenceAnalysisLogs)
+        } else {
+            intelligenceInsight = localIntelligenceInsight
+        }
     }
 
     func setSamplingPreference(_ preference: SamplingPreference) {
@@ -1068,6 +2610,60 @@ final class BatteryViewModel: ObservableObject {
     func setLearningEnabled(_ enabled: Bool) {
         learningEnabled = enabled
         defaults.set(enabled, forKey: "cellium.learningEnabled")
+    }
+
+    func setCyclePlanEnabled(_ enabled: Bool) {
+        cyclePlanConfiguration.enabled = enabled
+        cyclePlanDidChange()
+    }
+
+    func setCyclePlanMode(_ mode: CyclePlanMode) {
+        cyclePlanConfiguration.mode = mode
+        if mode == .targetDate {
+            if cyclePlanConfiguration.targetDate == nil {
+                cyclePlanConfiguration.targetDate = Calendar.autoupdatingCurrent.date(
+                    byAdding: .year,
+                    value: 1,
+                    to: Date()
+                )
+            }
+            if cyclePlanConfiguration.targetCycleCount == nil {
+                cyclePlanConfiguration.targetCycleCount = (battery.cycleCount ?? 0) + 100
+            }
+        }
+        cyclePlanDidChange()
+    }
+
+    func setCycleWeeklyBudget(_ value: Double) {
+        cyclePlanConfiguration.weeklyEquivalentCycleBudget = min(100, max(0.1, value))
+        cyclePlanDidChange()
+    }
+
+    func setCycleTargetDate(_ date: Date) {
+        let tomorrow = Calendar.autoupdatingCurrent.date(byAdding: .day, value: 1, to: Date()) ?? Date()
+        cyclePlanConfiguration.targetDate = max(date, tomorrow)
+        cyclePlanDidChange()
+    }
+
+    func setCycleTargetCount(_ value: Int) {
+        cyclePlanConfiguration.targetCycleCount = max(battery.cycleCount ?? 0, value)
+        cyclePlanDidChange()
+    }
+
+    func setCycleAlertsEnabled(_ enabled: Bool) {
+        cyclePlanConfiguration.alertsEnabled = enabled
+        cyclePlanDidChange()
+    }
+
+    private func cyclePlanDidChange() {
+        persistCyclePlanConfiguration()
+        guard let store else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            try? await refreshCycleBudget(from: store, now: Date())
+            evaluateProactiveSignals()
+            refreshLocalIntelligenceInsight()
+        }
     }
 
     func setTemperatureAlertCelsius(_ value: Double) {
@@ -1108,6 +2704,7 @@ final class BatteryViewModel: ObservableObject {
             try? await self.coordinator.flush()
             self.refreshLiveState(includeBackgroundProcesses: true)
         }
+        startIntelligenceMonitoring()
     }
 
     func setPanelVisible(_ isVisible: Bool) {
@@ -1182,6 +2779,8 @@ final class BatteryViewModel: ObservableObject {
         panelVisibilityTask = nil
         backgroundHealthTask?.cancel()
         backgroundHealthTask = nil
+        intelligenceTask?.cancel()
+        intelligenceTask = nil
         try? await coordinator.stopAndFlush()
     }
 
@@ -1203,6 +2802,7 @@ final class BatteryViewModel: ObservableObject {
         let date = Date()
         battery = batteryReader.readSnapshot(at: date)
         system = systemReader.readSnapshot(at: date)
+        refreshHealthEstimate()
         lastUpdated = date
         if includeProcessImpacts {
             refreshProcessImpactsIfNeeded(
@@ -1211,6 +2811,7 @@ final class BatteryViewModel: ObservableObject {
             )
         }
         evaluateProactiveSignals()
+        refreshLocalIntelligenceInsight()
     }
 
     private func refreshProcessImpactsIfNeeded(
@@ -1229,7 +2830,7 @@ final class BatteryViewModel: ObservableObject {
         }
         self.lastProcessImpactRefresh = date
         let nextImpacts = processMonitor.topImpacts(
-            limit: 6,
+            limit: 48,
             batteryPercentPerMinute: effectiveBatteryPercentPerMinute,
             memoryTotalBytes: system.memoryTotalBytes
         )
@@ -1238,6 +2839,7 @@ final class BatteryViewModel: ObservableObject {
                 StoredProcessSample(
                     processID: $0.id,
                     name: $0.name,
+                    kind: $0.kind,
                     timestamp: date,
                     cpuPercent: $0.averageCPUPercent,
                     residentMemoryBytes: $0.residentMemoryBytes,
@@ -1283,6 +2885,9 @@ final class BatteryViewModel: ObservableObject {
             if recentSamples != nextRecentSamples {
                 recentSamples = nextRecentSamples
             }
+            try await refreshCycleBudget(from: store, now: now)
+            evaluateProactiveSignals()
+            refreshLocalIntelligenceInsight()
             refreshProcessImpactsIfNeeded(
                 at: now,
                 allowBackground: !panelVisible
@@ -1301,65 +2906,109 @@ final class BatteryViewModel: ObservableObject {
     }
 
     private func evaluateProactiveSignals() {
-        let candidate: ProactiveAlert?
+        var candidates: [(score: Int, alert: ProactiveAlert)] = []
+        if !isBatteryUseCurrentlyPausedByExternalPower,
+           cyclePlanConfiguration.enabled,
+           cyclePlanConfiguration.alertsEnabled,
+           let summary = cycleUsageSummary,
+           summary.status == .elevated || summary.status == .high {
+            var measurements: [String: Double] = [
+                "todayEFC": summary.todayEquivalentCycles,
+                "rolling24HourEFC": summary.rolling24HourEquivalentCycles,
+                "todayUsagePercent": summary.todayUsagePercent,
+                "hardwareCycleDelta24h": Double(summary.rolling24HourHardwareCycleDelta),
+                "weeklyEFC": summary.weekEquivalentCycles
+            ]
+            if let projected = summary.projectedWeekEquivalentCycles {
+                measurements["projectedWeekEFC"] = projected
+            }
+            if let budget = summary.weeklyBudget {
+                measurements["weeklyBudgetEFC"] = budget
+            }
+            let critical = summary.status == .high
+            let alert = ProactiveAlert(
+                identifier: critical ? "cycle-pace-high" : "cycle-pace-elevated",
+                title: language == .spanish
+                    ? (critical ? "Ritmo de ciclos alto" : "Uso de batería elevado")
+                    : (critical ? "High cycle pace" : "Elevated battery use"),
+                body: language == .spanish
+                    ? String(
+                        format: "%.2f ciclos equivalentes y +%d ciclos medidos en 24 h. Es uso acumulado alto, no daño confirmado.",
+                        summary.rolling24HourEquivalentCycles,
+                        summary.rolling24HourHardwareCycleDelta
+                    )
+                    : String(
+                        format: "%.2f equivalent cycles and +%d measured cycles in 24h. This is high accumulated use, not confirmed damage.",
+                        summary.rolling24HourEquivalentCycles,
+                        summary.rolling24HourHardwareCycleDelta
+                    ),
+                severity: critical ? .critical : .warning,
+                measurements: measurements
+            )
+            candidates.append((critical ? 300 : 180, alert))
+        }
+
         if let app = processImpacts.first(where: { isHighMemoryImpact($0) }) {
             let memory = memoryDescription(for: app)
-            candidate = ProactiveAlert(
+            candidates.append((140, ProactiveAlert(
                 identifier: "memory:\(app.id)",
-                title: language == .spanish ? "RAM alta" : "High memory use",
+                title: copy(.alertMemoryTitle),
                 body: String(format: copy(.appMemoryAlert), app.name, memory),
                 subject: app.name,
                 measurements: processMeasurements(for: app)
-            )
-        } else if let dischargeRate = effectiveBatteryPercentPerMinute, dischargeRate >= 0.35 {
-            candidate = ProactiveAlert(
+            )))
+        }
+        if let dischargeRate = effectiveBatteryPercentPerMinute, dischargeRate >= 0.35 {
+            candidates.append((160, ProactiveAlert(
                 identifier: "discharge",
-                title: language == .spanish ? "Descarga rápida" : "Fast battery drain",
+                title: copy(.alertDischargeTitle),
                 body: String(format: copy(.rapidDischargeAlert), dischargeRate),
                 measurements: ["percentPerMinute": dischargeRate]
-            )
-        } else if let app = processImpacts.first(where: { ($0.estimatedBatteryPercentPerMinute ?? 0) >= 0.05 }),
-                  let rate = app.estimatedBatteryPercentPerMinute {
-            candidate = ProactiveAlert(
+            )))
+        }
+        if let app = processImpacts.first(where: { ($0.estimatedBatteryPercentPerMinute ?? 0) >= 0.05 }),
+           let rate = app.estimatedBatteryPercentPerMinute {
+            candidates.append((130, ProactiveAlert(
                 identifier: "energy:\(app.id)",
-                title: language == .spanish ? "Impacto de energía" : "Energy impact",
+                title: copy(.alertEnergyTitle),
                 body: String(format: copy(.appEnergyAlert), app.name, rate),
                 subject: app.name,
                 measurements: processMeasurements(for: app, energyRate: rate)
-            )
-        } else if let app = processImpacts.first(where: { isHighCPUImpact($0) }) {
-            candidate = ProactiveAlert(
+            )))
+        }
+        if let app = processImpacts.first(where: { isHighCPUImpact($0) }) {
+            candidates.append((120, ProactiveAlert(
                 identifier: "cpu:\(app.id)",
-                title: language == .spanish ? "CPU alta" : "High app CPU",
+                title: copy(.alertCPUProcessTitle),
                 body: String(format: copy(.appCPUAlert), app.name, app.averageCPUPercent),
                 subject: app.name,
                 measurements: processMeasurements(for: app)
-            )
-        } else if let memory = system.memoryUsedPercent, memory >= 90 {
-            candidate = ProactiveAlert(
+            )))
+        }
+        if let memory = system.memoryUsedPercent, memory >= 90 {
+            candidates.append((110, ProactiveAlert(
                 identifier: "system-memory",
-                title: language == .spanish ? "RAM alta" : "High memory use",
+                title: copy(.alertMemoryTitle),
                 body: String(format: copy(.memoryAlert), memory),
                 measurements: ["memoryPercent": memory]
-            )
-        } else {
-            candidate = nil
+            )))
         }
 
+        let candidate = candidates.max { $0.score < $1.score }?.alert
         proactiveAlert = candidate
-        guard let candidate else {
-            lastProactiveAlertKey = nil
-            lastProactiveAlertDate = nil
-            return
-        }
+        guard let candidate else { return }
         let now = Date()
-        if candidate.identifier == lastProactiveAlertKey,
-           let lastProactiveAlertDate,
-           now.timeIntervalSince(lastProactiveAlertDate) < 20 * 60 {
+        let cooldown: TimeInterval = candidate.identifier.hasPrefix("cycle-pace")
+            ? 6 * 60 * 60
+            : 20 * 60
+        let alertDateKey = "cellium.alert.lastDate.\(candidate.identifier)"
+        if let lastDate = defaults.object(forKey: alertDateKey) as? Date,
+           now.timeIntervalSince(lastDate) < cooldown {
             return
         }
         lastProactiveAlertKey = candidate.identifier
         lastProactiveAlertDate = now
+        defaults.set(now, forKey: alertDateKey)
         persistAlertEvent(candidate, occurredAt: now)
         onProactiveAlert?(candidate)
     }
@@ -1442,7 +3091,9 @@ final class BatteryViewModel: ObservableObject {
 struct ProcessEnergyImpact: Identifiable, Equatable {
     let id: Int32
     let name: String
+    let kind: StoredProcessKind
     let icon: NSImage?
+    let applicationID: Int32?
     let averageCPUPercent: Double
     let residentMemoryBytes: Int64?
     let memoryPercent: Double?
@@ -1451,6 +3102,7 @@ struct ProcessEnergyImpact: Identifiable, Equatable {
     static func == (lhs: ProcessEnergyImpact, rhs: ProcessEnergyImpact) -> Bool {
         lhs.id == rhs.id
             && lhs.name == rhs.name
+            && lhs.kind == rhs.kind
             && lhs.averageCPUPercent == rhs.averageCPUPercent
             && lhs.residentMemoryBytes == rhs.residentMemoryBytes
             && lhs.memoryPercent == rhs.memoryPercent
@@ -1481,8 +3133,18 @@ enum ProcessImpactIntensity {
 
 @MainActor
 final class ProcessEnergyMonitor {
+    private struct ApplicationIdentity {
+        let processID: Int32
+        let name: String
+        let icon: NSImage?
+    }
+
     private struct ProcessUsage {
-        let application: NSRunningApplication
+        let processID: Int32
+        let name: String
+        let kind: StoredProcessKind
+        let icon: NSImage?
+        let applicationID: Int32?
         let cpuPercent: Double
         let residentMemoryBytes: Int64?
     }
@@ -1507,23 +3169,49 @@ final class ProcessEnergyMonitor {
         guard limit > 0 else { return [] }
         let now = Date()
         let currentProcessID = ProcessInfo.processInfo.processIdentifier
-        let applications = NSWorkspace.shared.runningApplications.filter { application in
-            application.processIdentifier != currentProcessID
-                && application.activationPolicy == .regular
-                && !application.isTerminated
-                && !(application.localizedName ?? "").isEmpty
+        let runningApplications = NSWorkspace.shared.runningApplications.filter {
+            $0.processIdentifier != currentProcessID && !$0.isTerminated
         }
-        let activeIDs = Set(applications.map(\.processIdentifier))
+        let applicationsByID = Dictionary(
+            uniqueKeysWithValues: runningApplications.map { ($0.processIdentifier, $0) }
+        )
+        let applicationsByBundlePath = runningApplications.reduce(
+            into: [String: ApplicationIdentity]()
+        ) { result, application in
+            guard let bundleURL = application.bundleURL else { return }
+            let bundlePath = bundleURL.standardizedFileURL.path
+            if let existing = result[bundlePath],
+               existing.processID != application.processIdentifier,
+               application.activationPolicy != .regular {
+                return
+            }
+            result[bundlePath] = applicationIdentity(from: application, bundleURL: bundleURL)
+        }
+        let processIDs = allProcessIDs().filter { $0 != currentProcessID && $0 > 0 }
+        let activeIDs = Set(processIDs)
         previousCPUSeconds = previousCPUSeconds.filter { activeIDs.contains($0.key) }
         observations = observations.filter { activeIDs.contains($0.key) }
         lastRankOrder = lastRankOrder.filter { activeIDs.contains($0.key) }
 
-        let usages = applications.compactMap { processUsage(for: $0, at: now) }
+        let usages = processIDs.compactMap { processID in
+            let application = applicationsByID[processID]
+            let identity = applicationIdentity(
+                for: processID,
+                application: application,
+                applicationsByBundlePath: applicationsByBundlePath
+            )
+            return processUsage(
+                for: processID,
+                application: application,
+                applicationIdentity: identity,
+                at: now
+            )
+        }
         let totalCPU = max(1, usages.reduce(0) { $0 + $1.cpuPercent })
         let cutoff = now.addingTimeInterval(-observationWindow)
 
         for usage in usages {
-            let processID = usage.application.processIdentifier
+            let processID = usage.processID
             let cpuShare = max(0, min(1, usage.cpuPercent / totalCPU))
             let estimatedBatteryPercentPerMinute: Double?
             if usage.cpuPercent > 0 {
@@ -1549,8 +3237,8 @@ final class ProcessEnergyMonitor {
             observations[processID] = processObservations
         }
 
-        let impacts = usages.compactMap { usage -> ProcessEnergyImpact? in
-            let processID = usage.application.processIdentifier
+        let processImpacts = usages.compactMap { usage -> ProcessEnergyImpact? in
+            let processID = usage.processID
             guard let history = observations[processID], !history.isEmpty else { return nil }
             let averageCPU = history.reduce(0) { $0 + $1.cpuPercent } / Double(history.count)
             let memorySamples = history.compactMap(\.residentMemoryBytes)
@@ -1569,8 +3257,10 @@ final class ProcessEnergyMonitor {
             }
             return ProcessEnergyImpact(
                 id: processID,
-                name: usage.application.localizedName ?? "Unknown",
-                icon: nil,
+                name: usage.name,
+                kind: usage.kind,
+                icon: usage.icon,
+                applicationID: usage.applicationID,
                 averageCPUPercent: averageCPU,
                 residentMemoryBytes: averageMemoryBytes,
                 memoryPercent: memoryPercent,
@@ -1578,10 +3268,20 @@ final class ProcessEnergyMonitor {
             )
         }
 
+        let groupedApplications = Dictionary(grouping: processImpacts.compactMap { impact in
+            impact.applicationID == nil ? nil : impact
+        }) { impact in
+            impact.applicationID!
+        }
+        var impacts = processImpacts.filter { $0.applicationID == nil }
+        for (applicationID, applicationImpacts) in groupedApplications {
+            impacts.append(aggregateApplicationImpacts(applicationID, from: applicationImpacts))
+        }
+
         let sorted = impacts.sorted { left, right in
             let leftEnergy = left.estimatedBatteryPercentPerMinute ?? 0
             let rightEnergy = right.estimatedBatteryPercentPerMinute ?? 0
-            if abs(leftEnergy - rightEnergy) > 0.005 {
+            if Swift.abs(leftEnergy - rightEnergy) > 0.005 {
                 return leftEnergy > rightEnergy
             }
             if abs(left.averageCPUPercent - right.averageCPUPercent) > 0.25 {
@@ -1601,24 +3301,137 @@ final class ProcessEnergyMonitor {
         }
         let result = Array(sorted.prefix(limit))
         lastRankOrder = Dictionary(uniqueKeysWithValues: result.enumerated().map { ($0.element.id, $0.offset) })
-        return result.map { impact in
-            guard let application = applications.first(where: { $0.processIdentifier == impact.id }) else {
-                return impact
-            }
-            return ProcessEnergyImpact(
-                id: impact.id,
-                name: impact.name,
-                icon: application.icon,
-                averageCPUPercent: impact.averageCPUPercent,
-                residentMemoryBytes: impact.residentMemoryBytes,
-                memoryPercent: impact.memoryPercent,
-                estimatedBatteryPercentPerMinute: impact.estimatedBatteryPercentPerMinute
-            )
-        }
+        return result
     }
 
-    private func processUsage(for application: NSRunningApplication, at date: Date) -> ProcessUsage? {
-        let processID = application.processIdentifier
+    private func allProcessIDs() -> [Int32] {
+        let requestedBytes = proc_listpids(UInt32(PROC_ALL_PIDS), 0, nil, 0)
+        guard requestedBytes > 0 else { return [] }
+        let count = Int(requestedBytes) / MemoryLayout<pid_t>.stride + 1
+        var processIDs = [pid_t](repeating: 0, count: count)
+        let returnedBytes = processIDs.withUnsafeMutableBytes { buffer in
+            proc_listpids(
+                UInt32(PROC_ALL_PIDS),
+                0,
+                buffer.baseAddress,
+                Int32(buffer.count)
+            )
+        }
+        guard returnedBytes > 0 else { return [] }
+        let returnedCount = min(processIDs.count, Int(returnedBytes) / MemoryLayout<pid_t>.stride)
+        return Array(processIDs.prefix(returnedCount))
+    }
+
+    private func processPath(for processID: Int32) -> String? {
+        var buffer = [CChar](repeating: 0, count: 4_096)
+        let length = buffer.withUnsafeMutableBytes { rawBuffer in
+            proc_pidpath(processID, rawBuffer.baseAddress, UInt32(rawBuffer.count))
+        }
+        guard length > 0 else { return nil }
+        let bytes = buffer.map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self).trimmingCharacters(in: .controlCharacters)
+    }
+
+    private func applicationBundleURL(for processID: Int32) -> URL? {
+        guard let path = processPath(for: processID) else { return nil }
+        let components = URL(fileURLWithPath: path).pathComponents
+        guard let contentsIndex = components.firstIndex(where: {
+            $0.caseInsensitiveCompare("Contents") == .orderedSame
+        }),
+        contentsIndex > 1,
+        components[contentsIndex - 1].lowercased().hasSuffix(".app") else {
+            return nil
+        }
+        let bundlePath = "/" + components.dropFirst().prefix(contentsIndex - 1).joined(separator: "/")
+        return URL(fileURLWithPath: bundlePath).standardizedFileURL
+    }
+
+    private func applicationIdentity(
+        from application: NSRunningApplication,
+        bundleURL: URL? = nil
+    ) -> ApplicationIdentity {
+        let resolvedBundleURL = bundleURL ?? application.bundleURL
+        let fallbackName = resolvedBundleURL?.deletingPathExtension().lastPathComponent
+            ?? "PID \(application.processIdentifier)"
+        let name: String
+        if let localizedName = application.localizedName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !localizedName.isEmpty {
+            name = localizedName
+        } else {
+            name = fallbackName
+        }
+        return ApplicationIdentity(
+            processID: application.processIdentifier,
+            name: name,
+            icon: application.icon
+        )
+    }
+
+    private func applicationIdentity(
+        for processID: Int32,
+        application: NSRunningApplication?,
+        applicationsByBundlePath: [String: ApplicationIdentity]
+    ) -> ApplicationIdentity? {
+        if let application {
+            return applicationIdentity(from: application)
+        }
+        guard let bundleURL = applicationBundleURL(for: processID) else { return nil }
+        if let application = applicationsByBundlePath[bundleURL.path] {
+            return application
+        }
+        return ApplicationIdentity(
+            processID: processID,
+            name: bundleURL.deletingPathExtension().lastPathComponent,
+            icon: NSWorkspace.shared.icon(forFile: bundleURL.path)
+        )
+    }
+
+    private func processName(for processID: Int32, application: NSRunningApplication?) -> String {
+        if let localizedName = application?.localizedName,
+           !localizedName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return localizedName
+        }
+        if let path = processPath(for: processID) {
+            let name = URL(fileURLWithPath: path).lastPathComponent
+            if !name.isEmpty { return name }
+        }
+        return "PID \(processID)"
+    }
+
+    private func processKind(
+        for processID: Int32,
+        application: NSRunningApplication?,
+        applicationIdentity: ApplicationIdentity?
+    ) -> StoredProcessKind {
+        let path = processPath(for: processID)?.lowercased() ?? ""
+        let name = processName(for: processID, application: application).lowercased()
+        if applicationIdentity != nil
+            || application?.activationPolicy == .regular
+            || path.contains(".app/contents/") {
+            return .application
+        }
+        let scriptExtensions = [".sh", ".bash", ".zsh", ".fish", ".py", ".rb", ".pl", ".js", ".command"]
+        let scriptRunners = ["sh", "bash", "zsh", "fish", "python", "python3", "ruby", "perl", "node", "osascript"]
+        if scriptExtensions.contains(where: path.hasSuffix)
+            || scriptRunners.contains(where: { name == $0 || name.hasPrefix("\($0).") }) {
+            return .script
+        }
+        if path.hasPrefix("/usr/libexec/")
+            || path.hasPrefix("/system/library/")
+            || path.hasPrefix("/library/launchdaemons/")
+            || path.hasPrefix("/sbin/")
+            || path.hasPrefix("/usr/sbin/") {
+            return .daemon
+        }
+        return .process
+    }
+
+    private func processUsage(
+        for processID: Int32,
+        application: NSRunningApplication?,
+        applicationIdentity: ApplicationIdentity?,
+        at date: Date
+    ) -> ProcessUsage? {
         let raw = UnsafeMutableRawPointer.allocate(
             byteCount: MemoryLayout<rusage_info_v4>.size,
             alignment: MemoryLayout<rusage_info_v4>.alignment
@@ -1637,7 +3450,15 @@ final class ProcessEnergyMonitor {
         guard let previous = previousCPUSeconds[processID] else {
             previousCPUSeconds[processID] = (cpuSeconds, date)
             return ProcessUsage(
-                application: application,
+                processID: processID,
+                name: applicationIdentity?.name ?? processName(for: processID, application: application),
+                kind: processKind(
+                    for: processID,
+                    application: application,
+                    applicationIdentity: applicationIdentity
+                ),
+                icon: applicationIdentity?.icon ?? application?.icon,
+                applicationID: applicationIdentity?.processID,
                 cpuPercent: 0,
                 residentMemoryBytes: residentMemoryBytes(for: processID)
             )
@@ -1648,9 +3469,44 @@ final class ProcessEnergyMonitor {
         previousCPUSeconds[processID] = (cpuSeconds, date)
 
         return ProcessUsage(
-            application: application,
+            processID: processID,
+            name: applicationIdentity?.name ?? processName(for: processID, application: application),
+            kind: processKind(
+                for: processID,
+                application: application,
+                applicationIdentity: applicationIdentity
+            ),
+            icon: applicationIdentity?.icon ?? application?.icon,
+            applicationID: applicationIdentity?.processID,
             cpuPercent: cpuPercent,
             residentMemoryBytes: residentMemoryBytes(for: processID)
+        )
+    }
+
+    private func aggregateApplicationImpacts(
+        _ applicationID: Int32,
+        from impacts: [ProcessEnergyImpact]
+    ) -> ProcessEnergyImpact {
+        let memorySamples = impacts.compactMap(\.residentMemoryBytes)
+        let averageMemoryBytes = memorySamples.isEmpty ? nil : memorySamples.reduce(0, +)
+        let batterySamples = impacts.compactMap(\.estimatedBatteryPercentPerMinute)
+        let estimatedBattery = batterySamples.isEmpty
+            ? nil
+            : batterySamples.reduce(0, +)
+        let memoryPercent = impacts.compactMap(\.memoryPercent).reduce(0, +)
+        let representative = impacts.max { left, right in
+            left.averageCPUPercent < right.averageCPUPercent
+        } ?? impacts[0]
+        return ProcessEnergyImpact(
+            id: applicationID,
+            name: representative.name,
+            kind: .application,
+            icon: impacts.compactMap(\.icon).first,
+            applicationID: nil,
+            averageCPUPercent: impacts.reduce(0) { $0 + $1.averageCPUPercent },
+            residentMemoryBytes: averageMemoryBytes,
+            memoryPercent: memoryPercent > 0 ? memoryPercent : nil,
+            estimatedBatteryPercentPerMinute: estimatedBattery
         )
     }
 
@@ -1682,7 +3538,7 @@ struct QuickPanelView: View {
         HStack(alignment: .center) {
             BrandMark()
                 .frame(width: 24, height: 24)
-            Text("Cellium")
+            Text(model.copy(.appName))
                 .font(.system(size: 16, weight: .semibold, design: .rounded))
             Spacer()
             Text(chargeText)
@@ -1717,20 +3573,25 @@ struct QuickPanelView: View {
 
     private var metrics: some View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
-            MetricView(title: "Health", value: healthText, quality: "calculated")
-            MetricView(title: "Temperature", value: temperatureText, quality: "measured")
-            MetricView(title: "Cycles", value: cycleText, quality: "measured")
+            MetricView(title: model.copy(.health), value: healthText, quality: model.copy(.calculated))
+            MetricView(title: model.copy(.temperature), value: temperatureText, quality: model.copy(.measured))
+            MetricView(title: model.copy(.cycles), value: cycleText, quality: model.copy(.measured))
         }
     }
 
     private var drivers: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("System state")
+            Text(model.language == .spanish ? "Estado del sistema" : "System state")
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .foregroundStyle(CelliumBrand.muted)
             HStack(spacing: 8) {
                 StatePill(title: model.system.thermalState.rawValue.capitalized, color: CelliumBrand.accent)
-                StatePill(title: model.system.lowPowerModeEnabled ? "Low Power" : "Automatic", color: CelliumBrand.info)
+                StatePill(
+                    title: model.system.lowPowerModeEnabled
+                        ? (model.language == .spanish ? "Bajo consumo" : "Low Power")
+                        : (model.language == .spanish ? "Automático" : "Automatic"),
+                    color: CelliumBrand.info
+                )
                 if let watts = model.batteryPowerWatts {
                     StatePill(title: String(format: "%.1f W", watts), color: watts > 0 ? CelliumBrand.warning : CelliumBrand.accent)
                 }
@@ -1740,11 +3601,11 @@ struct QuickPanelView: View {
 
     private var actions: some View {
         HStack {
-            Text("Read-only monitoring")
+            Text(model.language == .spanish ? "Monitoreo de solo lectura" : "Read-only monitoring")
                 .font(.system(size: 11, weight: .medium, design: .rounded))
                 .foregroundStyle(CelliumBrand.muted)
             Spacer()
-            Text("Diagnostics →")
+            Text(model.language == .spanish ? "Diagnóstico →" : "Diagnostics →")
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
                 .foregroundStyle(CelliumBrand.accentStrong)
         }
@@ -1753,16 +3614,19 @@ struct QuickPanelView: View {
     private var historyBlock: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("History & diagnostics")
+                Text(model.language == .spanish ? "Historial y diagnóstico" : "History & diagnostics")
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .foregroundStyle(CelliumBrand.muted)
                 Spacer()
-                Picker("History range", selection: Binding(
+                Picker(
+                    model.language == .spanish ? "Rango del historial" : "History range",
+                    selection: Binding(
                     get: { model.historyRange },
                     set: { model.setHistoryRange($0) }
-                )) {
+                    )
+                ) {
                     ForEach(HistoryRange.allCases) { range in
-                        Text(range.label).tag(range)
+                        Text(range.label(for: model.language)).tag(range)
                     }
                 }
                 .labelsHidden()
@@ -1776,7 +3640,11 @@ struct QuickPanelView: View {
                         .foregroundStyle(CelliumBrand.accentStrong)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Refresh history and diagnostics")
+                .accessibilityLabel(
+                    model.language == .spanish
+                        ? "Actualizar historial y diagnóstico"
+                        : "Refresh history and diagnostics"
+                )
             }
 
             if let storeError = model.storeError {
@@ -1786,35 +3654,39 @@ struct QuickPanelView: View {
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 if model.historyAggregates.isEmpty {
-                    Text("No data recorded for this range.")
+                        Text(model.copy(.noData))
                         .font(.system(size: 11, weight: .regular, design: .rounded))
                         .foregroundStyle(CelliumBrand.muted)
                 } else {
-                    HistoryChart(aggregates: model.historyAggregates)
+                        HistoryChart(aggregates: model.historyAggregates, language: model.language)
                         .frame(height: 96)
-                        .accessibilityLabel("Battery charge history for \(model.historyRange.label)")
+                        .accessibilityLabel(
+                            model.language == .spanish
+                                ? "Historial del nivel de batería para \(model.historyRange.label(for: model.language))"
+                                : "Battery charge history for \(model.historyRange.label(for: model.language))"
+                        )
                 }
 
                 if model.recentSamples.isEmpty {
-                    Text("No recent samples recorded.")
+                    Text(model.copy(.noRecentSamples))
                         .font(.system(size: 11, weight: .regular, design: .rounded))
                         .foregroundStyle(CelliumBrand.muted)
                 } else {
                     ForEach(Array(model.recentSamples.prefix(3).enumerated()), id: \.offset) { _, sample in
-                        HistorySampleRow(sample: sample)
+                        HistorySampleRow(sample: sample, language: model.language)
                     }
                 }
                 if !model.recentSessions.isEmpty {
                     ForEach(Array(model.recentSessions.prefix(2).enumerated()), id: \.offset) { _, session in
-                        SessionHistoryRow(session: session)
+                        SessionHistoryRow(session: session, language: model.language)
                     }
                 }
 
                 HStack(spacing: 8) {
-                    Text("Quality")
+                    Text(model.language == .spanish ? "Calidad" : "Quality")
                     Text(model.battery.sourceQuality.rawValue)
                     Spacer()
-                    Text("Sampling")
+                    Text(model.copy(.sampling))
                     Text(model.samplingMode.rawValue)
                 }
                 .font(.system(size: 10, weight: .regular, design: .monospaced))
@@ -1822,14 +3694,30 @@ struct QuickPanelView: View {
 
                 if let diagnostics = model.storeDiagnostics {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("SQLite v\(diagnostics.schemaVersion) · \(ByteCountFormatter.string(fromByteCount: diagnostics.databaseSizeBytes, countStyle: .file)) · WAL \(ByteCountFormatter.string(fromByteCount: diagnostics.walSizeBytes, countStyle: .file))")
-                        Text("Pending writes: \(model.pendingSampleCount) samples · \(model.pendingSessionCount) sessions")
-                        Text("Diagnostics: \(model.battery.diagnostics.isEmpty ? "none" : model.battery.diagnostics.joined(separator: ", "))")
+                        Text(
+                            model.language == .spanish
+                                ? "SQLite v\(diagnostics.schemaVersion) · \(ByteCountFormatter.string(fromByteCount: diagnostics.databaseSizeBytes, countStyle: .file)) · WAL \(ByteCountFormatter.string(fromByteCount: diagnostics.walSizeBytes, countStyle: .file))"
+                                : "SQLite v\(diagnostics.schemaVersion) · \(ByteCountFormatter.string(fromByteCount: diagnostics.databaseSizeBytes, countStyle: .file)) · WAL \(ByteCountFormatter.string(fromByteCount: diagnostics.walSizeBytes, countStyle: .file))"
+                        )
+                        Text(
+                            model.language == .spanish
+                                ? "Escrituras pendientes: \(model.pendingSampleCount) muestras · \(model.pendingSessionCount) sesiones"
+                                : "Pending writes: \(model.pendingSampleCount) samples · \(model.pendingSessionCount) sessions"
+                        )
+                        Text(
+                            model.language == .spanish
+                                ? "Diagnóstico: \(model.battery.diagnostics.isEmpty ? "ninguno" : model.battery.diagnostics.joined(separator: ", "))"
+                                : "Diagnostics: \(model.battery.diagnostics.isEmpty ? "none" : model.battery.diagnostics.joined(separator: ", "))"
+                        )
                     }
                         .font(.system(size: 10, weight: .regular, design: .monospaced))
                         .foregroundStyle(CelliumBrand.muted)
                         .accessibilityElement(children: .combine)
-                        .accessibilityLabel("SQLite schema \(diagnostics.schemaVersion), database size \(diagnostics.databaseSizeBytes) bytes, WAL size \(diagnostics.walSizeBytes) bytes")
+                        .accessibilityLabel(
+                            model.language == .spanish
+                                ? "Esquema SQLite \(diagnostics.schemaVersion), base de datos de \(diagnostics.databaseSizeBytes) bytes, WAL de \(diagnostics.walSizeBytes) bytes"
+                                : "SQLite schema \(diagnostics.schemaVersion), database size \(diagnostics.databaseSizeBytes) bytes, WAL size \(diagnostics.walSizeBytes) bytes"
+                        )
                 }
             }
         }
@@ -1858,23 +3746,21 @@ struct QuickPanelView: View {
     }
 
     private var statusTitle: String {
-        if model.battery.atCriticalLevel { return "ATTENTION" }
-        if model.battery.externalPowerConnected && model.battery.isCharging { return "CHARGING" }
-        return "PROTECTED"
+        model.statusTitle
     }
 
     private var statusExplanation: String {
-        if model.battery.atCriticalLevel {
-            return "Battery reports a critical level. Connect power when possible."
-        }
-        if model.battery.externalPowerConnected && model.battery.isCharging {
-            return "The Mac is charging through its connected power source."
-        }
-        return "Everything looks normal. No action is required."
+        model.statusExplanation
     }
 
     private var statusColor: Color {
-        model.battery.atCriticalLevel ? CelliumBrand.critical : CelliumBrand.accent
+        switch model.statusKind {
+        case .protected: return CelliumBrand.accent
+        case .charging: return CelliumBrand.accentStrong
+        case .connectedNotCharging: return CelliumBrand.accentStrong
+        case .elevated: return CelliumBrand.warning
+        case .attention: return CelliumBrand.critical
+        }
     }
 }
 
@@ -1915,6 +3801,7 @@ private struct StatePill: View {
 
 private struct HistorySampleRow: View {
     let sample: StoredBatterySample
+    let language: CelliumLanguage
 
     var body: some View {
         HStack(spacing: 8) {
@@ -1929,40 +3816,63 @@ private struct HistorySampleRow: View {
                 .foregroundStyle(CelliumBrand.muted)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Battery sample, \(sample.battery.chargePercent.map { "\($0) percent" } ?? "charge unavailable")")
+        .accessibilityLabel(
+            language == .spanish
+                ? "Muestra de batería, \(sample.battery.chargePercent.map { "\($0) por ciento" } ?? "nivel no disponible")"
+                : "Battery sample, \(sample.battery.chargePercent.map { "\($0) percent" } ?? "charge unavailable")"
+        )
     }
 }
 
 private struct SessionHistoryRow: View {
     let session: BatterySession
+    let language: CelliumLanguage
 
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: session.kind == .charging ? "bolt.fill" : "battery.100")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(session.kind == .charging ? CelliumBrand.warning : CelliumBrand.accent)
-            Text(session.kind.rawValue.capitalized)
+            Text(sessionTitle)
                 .font(.system(size: 10, weight: .semibold, design: .rounded))
             Spacer()
-            Text("\(session.sampleCount) samples")
+            Text(language == .spanish ? "\(session.sampleCount) muestras" : "\(session.sampleCount) samples")
                 .font(.system(size: 10, weight: .regular, design: .monospaced))
                 .foregroundStyle(CelliumBrand.muted)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(session.kind.rawValue) session, \(session.sampleCount) samples")
+        .accessibilityLabel(
+            language == .spanish
+                ? "Sesión \(sessionTitle), \(session.sampleCount) muestras"
+                : "\(sessionTitle) session, \(session.sampleCount) samples"
+        )
+    }
+
+    private var sessionTitle: String {
+        switch (session.kind, language) {
+        case (.charging, .spanish): return "Cargando"
+        case (.discharging, .spanish): return "Descargando"
+        case (.connectedDeficit, .spanish): return "Conectado sin cargar"
+        case (.sleepGap, .spanish): return "Pausa de reposo"
+        case (.charging, .english): return "Charging"
+        case (.discharging, .english): return "Discharging"
+        case (.connectedDeficit, .english): return "Connected, not charging"
+        case (.sleepGap, .english): return "Sleep gap"
+        }
     }
 }
 
 private struct HistoryChart: View {
     let aggregates: [BatteryAggregate]
+    let language: CelliumLanguage
 
     var body: some View {
         Chart {
             ForEach(Array(aggregates.enumerated()), id: \.offset) { _, aggregate in
                 if let charge = aggregate.averageChargePercent {
                     LineMark(
-                        x: .value("Time", aggregate.bucketStart),
-                        y: .value("Charge", charge)
+                        x: .value(language == .spanish ? "Hora" : "Time", aggregate.bucketStart),
+                        y: .value(language == .spanish ? "Nivel" : "Charge", charge)
                     )
                     .foregroundStyle(CelliumBrand.accentStrong)
                     .interpolationMethod(.catmullRom)

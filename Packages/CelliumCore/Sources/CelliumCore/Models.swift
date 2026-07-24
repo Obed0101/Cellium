@@ -66,6 +66,7 @@ public struct BatterySnapshot: Codable, Equatable, Sendable {
     public let atCriticalLevel: Bool
     public let timeToEmptyMinutes: Int?
     public let timeToFullMinutes: Int?
+    public let chargeLimitPercent: Int?
     public let adapter: AdapterSnapshot?
     public let sourceQuality: SensorQuality
     public let powerSourceState: PowerSourceState
@@ -92,6 +93,7 @@ public struct BatterySnapshot: Codable, Equatable, Sendable {
         atCriticalLevel: Bool = false,
         timeToEmptyMinutes: Int? = nil,
         timeToFullMinutes: Int? = nil,
+        chargeLimitPercent: Int? = nil,
         adapter: AdapterSnapshot? = nil,
         sourceQuality: SensorQuality = .unavailable,
         powerSourceState: PowerSourceState = .unknown,
@@ -117,6 +119,7 @@ public struct BatterySnapshot: Codable, Equatable, Sendable {
         self.atCriticalLevel = atCriticalLevel
         self.timeToEmptyMinutes = timeToEmptyMinutes
         self.timeToFullMinutes = timeToFullMinutes
+        self.chargeLimitPercent = chargeLimitPercent
         self.adapter = adapter
         self.sourceQuality = sourceQuality
         self.powerSourceState = powerSourceState

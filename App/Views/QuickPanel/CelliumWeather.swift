@@ -5,6 +5,7 @@ import Network
 struct WeatherSnapshot: Equatable, Sendable {
     let timestamp: Date
     let locationLabel: String?
+    let timezoneIdentifier: String?
     let temperatureCelsius: Double
     let apparentTemperatureCelsius: Double
     let relativeHumidity: Double
@@ -187,6 +188,7 @@ final class WeatherCoordinator: NSObject, @preconcurrency CLLocationManagerDeleg
             self.snapshot = WeatherSnapshot(
                 timestamp: snapshot.timestamp,
                 locationLabel: currentLocationLabel,
+                timezoneIdentifier: snapshot.timezoneIdentifier,
                 temperatureCelsius: snapshot.temperatureCelsius,
                 apparentTemperatureCelsius: snapshot.apparentTemperatureCelsius,
                 relativeHumidity: snapshot.relativeHumidity,
@@ -325,6 +327,7 @@ final class WeatherCoordinator: NSObject, @preconcurrency CLLocationManagerDeleg
                 self.snapshot = WeatherSnapshot(
                     timestamp: Date(),
                     locationLabel: label ?? decoded.timezone,
+                    timezoneIdentifier: decoded.timezone,
                     temperatureCelsius: decoded.current.temperatureCelsius,
                     apparentTemperatureCelsius: decoded.current.apparentTemperatureCelsius,
                     relativeHumidity: decoded.current.relativeHumidity,

@@ -10,14 +10,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminationFlushStarted = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        terminatePreviousInstances()
         NSApp.setActivationPolicy(.accessory)
 
         let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.statusItem = statusItem
         statusItem.button?.image = statusImage()
         statusItem.button?.image?.isTemplate = true
-        statusItem.button?.toolTip = "Cellium battery status"
+        statusItem.button?.toolTip = viewModel.language == .spanish
+            ? "Estado de batería de Cellium"
+            : "Cellium battery status"
         statusItem.button?.target = self
         statusItem.button?.action = #selector(statusItemClicked(_:))
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -35,20 +36,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             object: popover
         )
         observeRuntimeNotifications()
+
         configureProactiveNotifications()
         viewModel.onProactiveAlert = { [weak self] alert in
             self?.deliverProactiveAlert(alert)
         }
         viewModel.startMonitoring()
-    }
-
-    private func terminatePreviousInstances() {
-        guard let bundleIdentifier = Bundle.main.bundleIdentifier else { return }
-        let currentPID = ProcessInfo.processInfo.processIdentifier
-        for application in NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
-            where application.processIdentifier != currentPID {
-            application.terminate()
-        }
     }
 
     private func configureProactiveNotifications() {
@@ -80,6 +73,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
+    }
+
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        presentPopover(showingSettings: false, sender: statusItem?.button)
+        return true
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -118,20 +119,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
-    @objc private func systemWillSleep(_ notification: Notification) {
-        viewModel.handleSleep()
+    @objc nonisolated private func systemWillSleep(_ notification: Notification) {
+        Task { @MainActor [weak self] in
+            self?.viewModel.handleSleep()
+        }
     }
 
-    @objc private func systemDidWake(_ notification: Notification) {
-        viewModel.handleWake()
+    @objc nonisolated private func systemDidWake(_ notification: Notification) {
+        Task { @MainActor [weak self] in
+            self?.viewModel.handleWake()
+        }
     }
 
-    @objc private func powerStateDidChange(_ notification: Notification) {
-        viewModel.handlePowerStateChange()
+    @objc nonisolated private func powerStateDidChange(_ notification: Notification) {
+        Task { @MainActor [weak self] in
+            self?.viewModel.handlePowerStateChange()
+        }
     }
 
-    @objc private func thermalStateDidChange(_ notification: Notification) {
-        viewModel.handleThermalStateChange()
+    @objc nonisolated private func thermalStateDidChange(_ notification: Notification) {
+        Task { @MainActor [weak self] in
+            self?.viewModel.handleThermalStateChange()
+        }
     }
 
     @objc private func statusItemClicked(_ sender: Any?) {
@@ -166,14 +175,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func presentPopover(showingSettings: Bool, sender: Any?) {
         guard let button = statusItem?.button else { return }
+        NSApp.activate(ignoringOtherApps: true)
         let wasShown = popover.isShown
         viewModel.setShowingSettings(showingSettings)
 
         if !wasShown {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            popover.contentViewController?.view.window?.becomeKey()
+            popover.contentViewController?.view.window?.makeKeyAndOrderFront(nil)
         } else {
-            popover.contentViewController?.view.window?.becomeKey()
+            popover.contentViewController?.view.window?.makeKeyAndOrderFront(nil)
         }
 
         // Let AppKit draw the panel before starting sampling, process inspection
@@ -186,6 +196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.viewModel.refresh()
         }
     }
+
 
     private func makeStatusMenu() -> NSMenu {
         let menu = NSMenu()
@@ -229,9 +240,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewModel.language == .spanish ? spanish : english
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard popover.isShown else { return }
+        popover.contentViewController?.view.window?.makeKeyAndOrderFront(nil)
+    }
+
     @objc private func popoverDidClose(_ notification: Notification) {
         viewModel.setPanelVisible(false)
     }
+
 
     private func statusImage() -> NSImage? {
         if let url = CelliumAppResources.bundle.url(forResource: "Cellium_symbol_white", withExtension: "svg"),

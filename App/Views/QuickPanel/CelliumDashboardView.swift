@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import CelliumCore
 import CelliumStore
+import CelliumIntelligence
 
 enum CelliumLanguage: String, CaseIterable, Identifiable {
     case spanish = "es"
@@ -33,6 +34,8 @@ enum SamplingPreference: String, CaseIterable, Identifiable {
 enum DashboardStatus: Equatable {
     case protected
     case charging
+    case connectedNotCharging
+    case elevated
     case attention
 }
 
@@ -51,6 +54,51 @@ enum DashboardHistoryMetric: String, CaseIterable, Identifiable {
     case diskWrite
 
     var id: String { rawValue }
+}
+
+private enum DashboardPage: String, CaseIterable, Identifiable {
+    case dashboard
+    case history
+    case alerts
+    case agent
+
+    var id: String { rawValue }
+
+    var symbol: String {
+        switch self {
+        case .dashboard: return "house"
+        case .history: return "chart.xyaxis.line"
+        case .alerts: return "bell.badge"
+        case .agent: return "sparkles"
+        }
+    }
+}
+
+private enum SettingsCategory: String, CaseIterable, Identifiable {
+    case general
+    case assistant
+    case monitoring
+
+    var id: String { rawValue }
+
+    var symbol: String {
+        switch self {
+        case .general: return "slider.horizontal.3"
+        case .assistant: return "sparkles"
+        case .monitoring: return "waveform.path.ecg"
+        }
+    }
+
+    func title(for language: CelliumLanguage) -> String {
+        switch (self, language) {
+        case (.general, .spanish): return "General"
+        case (.assistant, .spanish): return "Asistente IA"
+        case (.monitoring, .spanish): return "Monitoreo"
+        case (.general, .english): return "General"
+        case (.assistant, .english): return "AI assistant"
+        case (.monitoring, .english): return "Monitoring"
+        }
+    }
 }
 
 enum CelliumText {
@@ -78,8 +126,20 @@ enum CelliumText {
     case powerSource
     case fullyCharged
     case discharging
+    case connectedNotCharging
+    case chargingToLimit
+    case chargeLimitActive
+    case powerNotMeasured
+    case powerMode
+    case automaticPower
+    case lowPower
+    case highPower
+    case powerModeUnavailable
     case protectedExplanation
     case chargingExplanation
+    case chargingToLimitExplanation
+    case chargeLimitActiveExplanation
+    case connectedNotChargingExplanation
     case thermalSerious
     case thermalCritical
     case temperatureAlert
@@ -142,9 +202,11 @@ enum CelliumText {
     case samplingInterval
     case samplingIntervalDetail
     case learningToggle
-    case learningToggleDetail
-    case alerts
-    case temperatureThreshold
+      case learningToggleDetail
+      case alerts
+      case clearAlerts
+      case clearIntelligenceLog
+      case temperatureThreshold
     case criticalChargeThreshold
     case data
     case localData
@@ -177,15 +239,75 @@ enum CelliumText {
     case cpuAlert
     case memoryAlert
     case diskAlert
-    case appImpact
-    case appImpactDetail
-    case noAppImpact
+     case appImpact
+     case appImpactDetail
+     case processImpact
+     case noApplicationImpact
+     case noAppImpact
     case estimated
      case rapidDischargeAlert
-     case appMemoryAlert
-     case appCPUAlert
-     case appEnergyAlert
-}
+      case appMemoryAlert
+      case appCPUAlert
+      case appEnergyAlert
+      case intelligence
+      case intelligenceSubtitle
+      case intelligenceEnabled
+      case intelligenceEnabledDetail
+        case intelligenceProvider
+        case intelligenceModel
+        case intelligenceAPIKey
+        case intelligenceAPIKeyDetail
+        case replaceAPIKey
+       case intelligenceAutomatic
+
+      case intelligenceAutomaticDetail
+      case intelligenceWiFiOnly
+      case intelligenceAnalyze
+      case intelligenceOpen
+      case intelligenceBack
+      case intelligenceSend
+      case intelligenceInputPlaceholder
+      case intelligenceNoMessages
+      case intelligenceThinking
+       case intelligenceLocalEvidence
+       case intelligenceLog
+       case intelligenceLogDetail
+       case intelligenceNoRuns
+       case intelligencePrompt
+       case intelligenceResponse
+       case intelligenceRunning
+       case intelligenceSucceeded
+       case intelligenceFailed
+       case intelligenceRuns
+       case openSettings
+        case intelligenceUnavailable
+       case intelligenceError
+       case alertNow
+       case alertBatteryEvent
+       case alertRecorded
+       case alertActivity
+       case alertDischargeTitle
+       case alertEnergyTitle
+        case alertCPUProcessTitle
+        case alertMemoryTitle
+        case alertLearningActionTitle
+        case alertMeasurementCPU
+
+       case alertMeasurementMemory
+       case alertMeasurementMemorySize
+       case alertMeasurementDischarge
+       case alertMeasurementEnergy
+        case validateProvider
+        case encryptedStored
+        case ollamaURL
+
+       case wifiUnavailable
+       case loadingHistory
+       case samplesCount
+       case chartTime
+       case chartDay
+       case chartProcess
+  }
 
 struct CelliumCopy {
     let language: CelliumLanguage
@@ -225,11 +347,23 @@ struct CelliumCopy {
         case .powerSource: return "Fuente de energía"
         case .fullyCharged: return "Completa"
         case .discharging: return "Descargando"
+        case .connectedNotCharging: return "Conectado, sin cargar"
+        case .chargingToLimit: return "Cargando hasta el límite del %d%%"
+        case .chargeLimitActive: return "Límite de carga activo · %d%%"
+        case .powerNotMeasured: return "Sin consumo"
+        case .powerMode: return "Modo de energía"
+        case .automaticPower: return "Automático"
+        case .lowPower: return "Bajo consumo"
+        case .highPower: return "Alto rendimiento"
+        case .powerModeUnavailable: return "Alto rendimiento no detectado"
         case .protectedExplanation: return "Todo se ve normal. Cellium está observando el estado real de tu batería."
         case .chargingExplanation: return "El cargador está conectado y la batería está recibiendo energía."
+        case .chargingToLimitExplanation: return "El adaptador está conectado y macOS está cargando la batería hasta el límite configurado de %d%%."
+        case .chargeLimitActiveExplanation: return "El adaptador está conectado y macOS mantiene la batería en el límite configurado de %d%%."
+        case .connectedNotChargingExplanation: return "El Mac está conectado a la corriente, pero no está tomando carga ahora. El límite o la gestión de carga puede estar activo."
         case .thermalSerious: return "La temperatura del sistema subió. El muestreo se ha reducido para proteger el equipo."
         case .thermalCritical: return "La temperatura del sistema es crítica. El muestreo permanece pausado."
-        case .temperatureAlert: return "Temperatura alta: %.1f °C, umbral %.1f °C."
+         case .temperatureAlert: return "Temperatura de batería alta: %.1f °C, umbral %.1f °C."
         case .criticalChargeAlert: return "Nivel bajo: %d%%, umbral %d%%. Conecta energía cuando puedas."
         case .learning: return "APRENDIZAJE"
         case .learningPaused: return "Aprendizaje pausado"
@@ -290,6 +424,8 @@ struct CelliumCopy {
         case .learningToggle: return "Aprendizaje local"
         case .learningToggleDetail: return "Usa tus propias muestras para entender tu rutina."
         case .alerts: return "Alertas"
+         case .clearAlerts: return "Limpiar alertas"
+         case .clearIntelligenceLog: return "Limpiar registro"
         case .temperatureThreshold: return "Avisar por temperatura"
         case .criticalChargeThreshold: return "Avisar por nivel crítico"
         case .data: return "Datos"
@@ -325,15 +461,76 @@ struct CelliumCopy {
         case .cpuAlert: return "CPU alta: %.0f%%. Revisa las tareas activas si el equipo sigue caliente."
         case .memoryAlert: return "RAM alta: %.0f%%. El sistema puede estar comprimiendo memoria."
         case .diskAlert: return "Disco casi lleno: %.0f%% usado. Libera espacio para evitar degradación."
-        case .appImpact: return "Apps con más uso"
-         case .appImpactDetail: return "batería/h cuando disponible · CPU/RAM promedio · ventana 1 h"
-         case .noAppImpact: return "Esperando lecturas de procesos activos"
+         case .appImpact: return "Apps con más uso"
+          case .appImpactDetail: return "batería/h cuando disponible · CPU/RAM promedio · ventana 1 h"
+          case .processImpact: return "Procesos con más uso"
+          case .noApplicationImpact: return "Esperando apps activas"
+          case .noAppImpact: return "Esperando procesos activos"
         case .estimated: return "estimado"
          case .rapidDischargeAlert: return "Descarga elevada: ~%.2f%% por minuto. Revisa el impacto de las apps."
-         case .appMemoryAlert: return "%@ usa %@ de RAM."
-         case .appCPUAlert: return "%@ está usando %.0f%% de CPU."
-         case .appEnergyAlert: return "%@: impacto estimado ~%.2f%% de batería por minuto."
-        }
+          case .appMemoryAlert: return "%@ usa %@ de RAM."
+          case .appCPUAlert: return "%@ está usando %.0f%% de CPU."
+          case .appEnergyAlert: return "%@: impacto estimado ~%.2f%% de batería por minuto."
+          case .intelligence: return "AGENTE DE BATERÍA"
+          case .intelligenceSubtitle: return "Explicaciones basadas en tus mediciones"
+          case .intelligenceEnabled: return "Agente de batería"
+          case .intelligenceEnabledDetail: return "Opcional. Cellium sigue funcionando sin IA."
+          case .intelligenceProvider: return "Proveedor"
+          case .intelligenceModel: return "Modelo"
+            case .intelligenceAPIKey: return "API key para el modelo de IA (OpenRouter)"
+             case .intelligenceAPIKeyDetail: return "Cellium genera una clave aleatoria local por usuario. La API key permanece cifrada en Application Support."
+
+            case .replaceAPIKey: return "Reemplazar API key"
+           case .intelligenceAutomatic: return "Análisis automático"
+
+          case .intelligenceAutomaticDetail: return "Aproximadamente cada hora y solo con Wi-Fi."
+          case .intelligenceWiFiOnly: return "Disponible solo con Wi-Fi"
+          case .intelligenceAnalyze: return "Analizar ahora"
+          case .intelligenceOpen: return "Abrir agente"
+          case .intelligenceBack: return "Volver al panel"
+          case .intelligenceSend: return "Enviar"
+          case .intelligenceInputPlaceholder: return "Pregunta por tu batería…"
+          case .intelligenceNoMessages: return "Pregunta qué está ocurriendo con tu batería."
+          case .intelligenceThinking: return "Analizando evidencia…"
+           case .intelligenceLocalEvidence: return "Evidencia local"
+           case .intelligenceLog: return "Registro de análisis IA"
+           case .intelligenceLogDetail: return "%d llamadas registradas · prompt, respuesta y evidencia"
+           case .intelligenceNoRuns: return "Todavía no hay análisis registrados."
+           case .intelligencePrompt: return "Prompt enviado"
+           case .intelligenceResponse: return "Respuesta recibida"
+           case .intelligenceRunning: return "Ejecutando análisis"
+           case .intelligenceSucceeded: return "Completado"
+           case .intelligenceFailed: return "Falló"
+           case .intelligenceRuns: return "%d análisis"
+           case .openSettings: return "Abrir configuración"
+       case .intelligenceUnavailable: return "Activa el agente y configura un proveedor para chatear."
+       case .intelligenceError: return "No se pudo completar el análisis"
+       case .alertNow: return "Ahora"
+       case .alertBatteryEvent: return "Evento de batería"
+       case .alertRecorded: return "Cellium registró una señal que merece atención a partir de datos medidos."
+       case .alertActivity: return "Actividad de %@"
+       case .alertDischargeTitle: return "Descarga rápida"
+       case .alertEnergyTitle: return "Impacto de energía"
+        case .alertCPUProcessTitle: return "CPU alta"
+        case .alertMemoryTitle: return "RAM alta"
+        case .alertLearningActionTitle: return "Acción recomendada por tu aprendizaje"
+        case .alertMeasurementCPU: return "CPU"
+
+       case .alertMeasurementMemory: return "RAM"
+       case .alertMeasurementMemorySize: return "Memoria"
+       case .alertMeasurementDischarge: return "Descarga"
+       case .alertMeasurementEnergy: return "Impacto estimado"
+        case .validateProvider: return "Validar proveedor"
+        case .encryptedStored: return "Cifrada localmente"
+        case .ollamaURL: return "URL de Ollama"
+
+       case .wifiUnavailable: return "Wi-Fi no disponible"
+       case .loadingHistory: return "Cargando historial"
+       case .samplesCount: return "%d muestras"
+       case .chartTime: return "Hora"
+       case .chartDay: return "Día"
+       case .chartProcess: return "Proceso"
+      }
     }
 
     private func english(_ key: CelliumText) -> String {
@@ -362,11 +559,23 @@ struct CelliumCopy {
         case .powerSource: return "Power source"
         case .fullyCharged: return "Full"
         case .discharging: return "Discharging"
+        case .connectedNotCharging: return "Connected, not charging"
+        case .chargingToLimit: return "Charging to %d%% limit"
+        case .chargeLimitActive: return "Charge limit active · %d%%"
+        case .powerNotMeasured: return "No draw"
+        case .powerMode: return "Power mode"
+        case .automaticPower: return "Automatic"
+        case .lowPower: return "Low Power"
+        case .highPower: return "High Power"
+        case .powerModeUnavailable: return "High Power not detected"
         case .protectedExplanation: return "Everything looks normal. Cellium is observing your battery's real state."
         case .chargingExplanation: return "Power is connected and the battery is receiving energy."
+        case .chargingToLimitExplanation: return "The adapter is connected and macOS is charging the battery up to its configured %d%% limit."
+        case .chargeLimitActiveExplanation: return "The adapter is connected and macOS is holding the battery at its configured %d%% limit."
+        case .connectedNotChargingExplanation: return "The Mac is connected to power but is not taking charge right now. A charge limit or charging management may be active."
         case .thermalSerious: return "System temperature is elevated. Sampling has slowed to protect the Mac."
         case .thermalCritical: return "System temperature is critical. Sampling remains paused."
-        case .temperatureAlert: return "High temperature: %.1f °C, threshold %.1f °C."
+         case .temperatureAlert: return "High battery temperature: %.1f °C, threshold %.1f °C."
         case .criticalChargeAlert: return "Low level: %d%%, threshold %d%%. Connect power when possible."
         case .learning: return "LEARNING"
         case .learningPaused: return "Learning paused"
@@ -429,6 +638,8 @@ struct CelliumCopy {
         case .learningToggle: return "Local learning"
         case .learningToggleDetail: return "Uses your own samples to understand your routine."
         case .alerts: return "Alerts"
+         case .clearAlerts: return "Clear alerts"
+         case .clearIntelligenceLog: return "Clear log"
         case .temperatureThreshold: return "Temperature warning"
         case .criticalChargeThreshold: return "Low battery warning"
         case .data: return "Data"
@@ -462,15 +673,76 @@ struct CelliumCopy {
         case .cpuAlert: return "High CPU: %.0f%%. Check active tasks if the Mac stays warm."
         case .memoryAlert: return "High RAM use: %.0f%%. The system may be compressing memory."
         case .diskAlert: return "Disk nearly full: %.0f%% used. Free space to avoid degradation."
-        case .appImpact: return "Apps with most use"
-         case .appImpactDetail: return "battery/h when available · average CPU/RAM · 1h window"
-         case .noAppImpact: return "Waiting for active process readings"
+         case .appImpact: return "Apps with most use"
+          case .appImpactDetail: return "battery/h when available · average CPU/RAM · 1h window"
+          case .processImpact: return "Processes with most use"
+          case .noApplicationImpact: return "Waiting for active apps"
+          case .noAppImpact: return "Waiting for active processes"
         case .estimated: return "estimated"
          case .rapidDischargeAlert: return "High drain: ~%.2f%% per minute. Check app impact."
-         case .appMemoryAlert: return "%@ is using %@ of RAM."
-         case .appCPUAlert: return "%@ is using %.0f%% CPU."
-         case .appEnergyAlert: return "%@: estimated impact ~%.2f%% battery per minute."
-        }
+          case .appMemoryAlert: return "%@ is using %@ of RAM."
+          case .appCPUAlert: return "%@ is using %.0f%% CPU."
+          case .appEnergyAlert: return "%@: estimated impact ~%.2f%% battery per minute."
+          case .intelligence: return "BATTERY AGENT"
+          case .intelligenceSubtitle: return "Explanations grounded in your measurements"
+          case .intelligenceEnabled: return "Battery agent"
+          case .intelligenceEnabledDetail: return "Optional. Cellium works without AI."
+          case .intelligenceProvider: return "Provider"
+          case .intelligenceModel: return "Model"
+         case .intelligenceAPIKey: return "API key for the AI model (OpenRouter)"
+           case .intelligenceAPIKeyDetail: return "Cellium generates a random local key per user. The API key remains encrypted in Application Support."
+
+          case .replaceAPIKey: return "Replace API key"
+           case .intelligenceAutomatic: return "Automatic analysis"
+
+          case .intelligenceAutomaticDetail: return "Approximately hourly and Wi-Fi only."
+          case .intelligenceWiFiOnly: return "Available on Wi-Fi only"
+          case .intelligenceAnalyze: return "Analyze now"
+          case .intelligenceOpen: return "Open agent"
+          case .intelligenceBack: return "Back to dashboard"
+          case .intelligenceSend: return "Send"
+          case .intelligenceInputPlaceholder: return "Ask about your battery…"
+          case .intelligenceNoMessages: return "Ask what is happening with your battery."
+          case .intelligenceThinking: return "Analyzing evidence…"
+        case .intelligenceLocalEvidence: return "Local evidence"
+        case .intelligenceLog: return "AI analysis log"
+        case .intelligenceLogDetail: return "%d calls logged · prompt, response, and evidence"
+        case .intelligenceNoRuns: return "No analyses have been logged yet."
+        case .intelligencePrompt: return "Prompt sent"
+        case .intelligenceResponse: return "Response received"
+        case .intelligenceRunning: return "Running analysis"
+        case .intelligenceSucceeded: return "Completed"
+        case .intelligenceFailed: return "Failed"
+        case .intelligenceRuns: return "%d analyses"
+        case .openSettings: return "Open Settings"
+       case .intelligenceUnavailable: return "Enable the agent and configure a provider to chat."
+       case .intelligenceError: return "The analysis could not be completed"
+       case .alertNow: return "Now"
+       case .alertBatteryEvent: return "Battery event"
+       case .alertRecorded: return "Cellium recorded a signal worth watching from measured data."
+       case .alertActivity: return "Activity from %@"
+       case .alertDischargeTitle: return "Fast battery drain"
+       case .alertEnergyTitle: return "Energy impact"
+        case .alertCPUProcessTitle: return "High CPU use"
+        case .alertMemoryTitle: return "High memory use"
+        case .alertLearningActionTitle: return "Action recommended from your learning"
+        case .alertMeasurementCPU: return "CPU"
+
+       case .alertMeasurementMemory: return "RAM"
+       case .alertMeasurementMemorySize: return "Memory"
+       case .alertMeasurementDischarge: return "Drain"
+       case .alertMeasurementEnergy: return "Estimated impact"
+        case .validateProvider: return "Validate provider"
+        case .encryptedStored: return "Encrypted locally"
+        case .ollamaURL: return "Ollama URL"
+
+       case .wifiUnavailable: return "Wi-Fi unavailable"
+       case .loadingHistory: return "Loading history"
+       case .samplesCount: return "%d samples"
+       case .chartTime: return "Time"
+       case .chartDay: return "Day"
+       case .chartProcess: return "Process"
+       }
     }
 }
 
@@ -479,9 +751,39 @@ struct CelliumDashboardView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var didRevealDashboard = false
     @State private var settingsScrollGeneration = 0
+      @State private var intelligenceAPIKey = ""
+      @State private var replacingIntelligenceAPIKey = false
+     @State private var showingHistoryPage = false
+
+    @State private var showingAlertsPage = false
+      @State private var selectedMenuPage = DashboardPage.dashboard
+      @State private var settingsReturnPage = DashboardPage.dashboard
+      @State private var selectedSettingsCategory = SettingsCategory.general
+      @State private var settingsCategoryOnNextOpen: SettingsCategory?
+     @Namespace private var pageMenuNamespace
+     @Namespace private var settingsCategoryNamespace
+
 
     private var motion: Animation? {
         reduceMotion ? nil : .easeOut(duration: 0.22)
+    }
+
+    private var pageTransition: AnyTransition {
+        guard !reduceMotion else { return .identity }
+        return .asymmetric(
+            insertion: .move(edge: .trailing).combined(with: .opacity),
+            removal: .move(edge: .leading).combined(with: .opacity)
+        )
+    }
+
+    private func navigate(_ action: () -> Void) {
+        guard !reduceMotion else {
+            action()
+            return
+        }
+        withAnimation(.easeInOut(duration: 0.24)) {
+            action()
+        }
     }
 
     private var appVersion: String {
@@ -499,19 +801,45 @@ struct CelliumDashboardView: View {
                     }
                 }
                 .id("settings-screen-\(settingsScrollGeneration)")
-                .transition(.identity)
+                .transition(pageTransition)
             } else {
-                ScrollView(.vertical, showsIndicators: false) {
-                    dashboard
+                VStack(spacing: 0) {
+                    navigationHeader
+                    Divider().overlay(CelliumBrand.border)
+                    Group {
+                        if model.showingAgent {
+                            BatteryAgentView(model: model, onOpenSettings: {
+                                settingsReturnPage = .agent
+                                settingsCategoryOnNextOpen = .assistant
+                                model.setShowingSettings(true)
+                            })
+                                .transition(pageTransition)
+                        } else if showingHistoryPage {
+                            BatteryHistoryPage(model: model)
+                                .transition(pageTransition)
+                        } else if showingAlertsPage {
+                            BatteryAlertsPage(model: model)
+                                .transition(pageTransition)
+                        } else {
+                            ScrollView(.vertical, showsIndicators: false) {
+                                dashboard
+                            }
+                            .id("dashboard-scroll")
+                            .transition(pageTransition)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .id("dashboard-scroll")
-                .transition(.identity)
             }
         }
         .frame(width: 438, height: 800)
         .background(CelliumBrand.background)
         .foregroundStyle(CelliumBrand.foreground)
         .animation(motion, value: model.statusKind)
+        .animation(motion, value: model.showingAgent)
+         .animation(motion, value: model.showingSettings)
+         .animation(motion, value: showingHistoryPage)
+        .animation(motion, value: showingAlertsPage)
         .onAppear {
             if reduceMotion {
                 didRevealDashboard = true
@@ -523,20 +851,31 @@ struct CelliumDashboardView: View {
             model.refresh()
         }
         .onChange(of: model.showingSettings) { _, showing in
-            if showing {
-                settingsScrollGeneration += 1
-            }
+             if showing {
+                 settingsScrollGeneration += 1
+                 selectedSettingsCategory = settingsCategoryOnNextOpen ?? .general
+                 settingsCategoryOnNextOpen = nil
+             }
         }
+    }
+
+    private var navigationHeader: some View {
+        topBar
+            .padding(.horizontal, 22)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
     }
 
     private var dashboard: some View {
         LazyVStack(alignment: .leading, spacing: 0) {
-            topBar
             primaryReadout
             weatherStrip
             insight
+            cycleUsage
+            intelligenceCard
             metrics
             systemMetrics
+            powerModeStrip
             history
             appImpacts
             learning
@@ -564,23 +903,215 @@ struct CelliumDashboardView: View {
                 } else {
                     ProgressView()
                         .controlSize(.small)
-                        .tint(CelliumBrand.signal)
+                    .tint(CelliumBrand.signal)
                 }
             }
-            Button {
-                model.setShowingSettings(true)
-            } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(CelliumBrand.foreground)
-                    .frame(width: 32, height: 32)
-                    .contentShape(Rectangle())
+            HStack(spacing: 2) {
+                ForEach(DashboardPage.allCases) { page in
+                    Button {
+                        selectPage(page)
+                    } label: {
+                        ZStack {
+                            if selectedMenuPage == page {
+                                Circle()
+                                    .fill(CelliumBrand.signal.opacity(0.22))
+                                    .matchedGeometryEffect(id: "active-page-circle", in: pageMenuNamespace)
+                            }
+                            Image(systemName: page.symbol)
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(selectedMenuPage == page ? CelliumBrand.foreground : CelliumBrand.muted)
+                        }
+                        .frame(width: 30, height: 30)
+                        .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(pageTitle(page))
+                    .accessibilityLabel(pageTitle(page))
+                    .accessibilityAddTraits(selectedMenuPage == page ? .isSelected : [])
+                }
+
+                 Button {
+                     navigate {
+                         settingsReturnPage = selectedMenuPage
+                         model.setShowingSettings(true)
+                     }
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(CelliumBrand.foreground)
+                        .frame(width: 30, height: 30)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(model.copy(.settings))
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(model.copy(.settings))
         }
         .animation(motion, value: model.isRefreshingHistory)
         .animation(motion, value: model.statusKind)
+    }
+
+    private func pageTitle(_ page: DashboardPage) -> String {
+        switch page {
+        case .dashboard:
+            return model.language == .spanish ? "Principal" : "Dashboard"
+        case .history:
+            return model.copy(.history)
+        case .alerts:
+            return model.copy(.alerts)
+        case .agent:
+            return model.language == .spanish ? "IA" : "AI"
+        }
+    }
+
+    private func selectPage(_ page: DashboardPage) {
+        withAnimation(.easeOut(duration: 0.24)) {
+            selectedMenuPage = page
+        }
+
+        guard !reduceMotion else {
+            navigateToPage(page)
+            return
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {
+            navigateToPage(page)
+        }
+    }
+
+      private func openAgentFromDashboard() {
+          selectPage(.agent)
+      }
+
+     private func navigateToPage(_ page: DashboardPage) {
+         navigate {
+             switch page {
+
+            case .dashboard:
+                showingHistoryPage = false
+                showingAlertsPage = false
+                model.setShowingAgent(false)
+                model.setShowingSettings(false)
+            case .history:
+                showingHistoryPage = true
+                showingAlertsPage = false
+                model.setShowingAgent(false)
+                model.setShowingSettings(false)
+                model.refreshHistory()
+            case .alerts:
+                showingHistoryPage = false
+                showingAlertsPage = true
+                model.setShowingAgent(false)
+                model.setShowingSettings(false)
+                model.refreshHistory()
+            case .agent:
+                showingHistoryPage = false
+                showingAlertsPage = false
+                model.setShowingSettings(false)
+                model.setShowingAgent(true)
+            }
+        }
+    }
+
+    private var intelligenceCard: some View {
+        let batteryUsePausedByPower = model.isBatteryUseCurrentlyPausedByExternalPower
+        let deterministicCycleAlert = !batteryUsePausedByPower && (model.cycleUsageSummary?.status == .elevated
+            || model.cycleUsageSummary?.status == .high
+        )
+        let latestAnalysis = deterministicCycleAlert ? nil : model.latestIntelligenceAnalysis
+        let insight = deterministicCycleAlert
+            ? (model.localIntelligenceInsight ?? model.intelligenceInsight)
+            : (model.intelligenceInsight ?? model.localIntelligenceInsight)
+        let severity = latestAnalysis?.severity.flatMap(BatteryInsightSeverity.init(rawValue:)) ?? insight?.severity
+        let symbol: String
+        let symbolColor: Color
+        if batteryUsePausedByPower {
+            symbol = "bolt.fill"
+            symbolColor = CelliumBrand.signal
+        } else if model.isGeneratingIntelligence {
+            symbol = "arrow.triangle.2.circlepath"
+            symbolColor = CelliumBrand.accentStrong
+        } else if let severity {
+            symbol = intelligenceSymbol(for: severity)
+            symbolColor = intelligenceColor(for: severity)
+        } else {
+            symbol = "sparkles"
+            symbolColor = CelliumBrand.signal
+        }
+        let status = batteryUsePausedByPower
+            ? (model.language == .spanish ? "Conectado: sin descarga activa" : "Connected: no active discharge")
+            : intelligenceStatusText(analysis: latestAnalysis, insight: insight)
+
+        return Button {
+            openAgentFromDashboard()
+        } label: {
+            HStack(spacing: 9) {
+                Image(systemName: symbol)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(symbolColor)
+                Text(status)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(CelliumBrand.foreground)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .frame(minHeight: 48)
+            .background(
+                batteryUsePausedByPower ? CelliumBrand.surface : CelliumBrand.elevated,
+                in: RoundedRectangle(cornerRadius: 15, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .stroke(CelliumBrand.border, lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(status)
+        .padding(.top, 12)
+    }
+
+    private func intelligenceStatusText(
+        analysis: StoredIntelligenceAnalysis?,
+        insight: BatteryInsight?
+    ) -> String {
+        if model.isGeneratingIntelligence {
+            return model.language == .spanish ? "Analizando batería" : "Analyzing battery"
+        }
+
+        let title = analysis?.title ?? insight?.title
+        let words = title?
+            .split(whereSeparator: { $0.isWhitespace || $0.isNewline })
+            .prefix(7)
+            .map(String.init)
+            .joined(separator: " ")
+
+        if let words, !words.isEmpty {
+            return words
+        }
+        return model.language == .spanish ? "Sin alertas de batería" : "No battery alerts"
+    }
+
+    private func intelligenceSymbol(for severity: BatteryInsightSeverity) -> String {
+        switch severity {
+        case .info:
+            return "checkmark.seal"
+        case .warning:
+            return "exclamationmark.triangle"
+        case .critical:
+            return "exclamationmark.octagon"
+        }
+    }
+
+    private func intelligenceColor(for severity: BatteryInsightSeverity) -> Color {
+        switch severity {
+        case .info:
+            return CelliumBrand.signal
+        case .warning:
+            return CelliumBrand.warning
+        case .critical:
+            return CelliumBrand.critical
+        }
     }
 
     private var primaryReadout: some View {
@@ -612,7 +1143,7 @@ struct CelliumDashboardView: View {
             HStack(spacing: 8) {
                 ReadoutPill(
                     symbol: "thermometer.medium",
-                    label: model.copy(.temperature),
+                    label: model.language == .spanish ? "Temp. batería" : "Battery temp",
                     value: model.battery.temperatureCelsius.map { String(format: "%.1f °C", $0) } ?? "—",
                     color: model.statusKind == .attention ? CelliumBrand.warning : CelliumBrand.foreground
                 )
@@ -706,8 +1237,37 @@ struct CelliumDashboardView: View {
                 value: model.system.diskUsedPercent.map { String(format: "%.0f%%", $0) } ?? "—",
                 detail: diskDetail
             )
+            CompactSystemMetric(
+                symbol: "thermometer.sun",
+                label: model.language == .spanish ? "Calor del sistema" : "System heat",
+                value: model.thermalStateLabel,
+                detail: model.thermalStateDetail
+            )
         }
         .padding(.top, 9)
+    }
+
+    private var powerModeStrip: some View {
+        HStack(spacing: 8) {
+            Image(systemName: model.system.lowPowerModeEnabled ? "leaf.fill" : "bolt.horizontal.circle")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(model.system.lowPowerModeEnabled ? CelliumBrand.warning : CelliumBrand.signal)
+            Text(model.copy(.powerMode))
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .foregroundStyle(CelliumBrand.muted)
+            Text(model.powerModeLabel)
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+            Spacer(minLength: 8)
+            Text(model.powerModeDetail)
+                .font(.system(size: 8, weight: .regular, design: .rounded))
+                .foregroundStyle(CelliumBrand.muted)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .padding(.vertical, 8)
+        .overlay(alignment: .bottom) { Divider().overlay(CelliumBrand.border) }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(model.copy(.powerMode)): \(model.powerModeLabel). \(model.powerModeDetail)")
     }
 
     private var memoryDetail: String? {
@@ -715,21 +1275,39 @@ struct CelliumDashboardView: View {
               let total = model.system.memoryTotalBytes else {
             return nil
         }
-        return "\(ByteCountFormatter.string(fromByteCount: used, countStyle: .memory)) / \(ByteCountFormatter.string(fromByteCount: total, countStyle: .memory))"
+        let usedGB = Double(used) / 1_073_741_824
+        let totalGB = Double(total) / 1_073_741_824
+        guard totalGB >= 1 else {
+            return "\(ByteCountFormatter.string(fromByteCount: used, countStyle: .memory)) / \(ByteCountFormatter.string(fromByteCount: total, countStyle: .memory))"
+        }
+        return String(format: "%.1f / %.0f GB", usedGB, totalGB)
     }
 
     private var diskDetail: String? {
         guard let free = model.system.diskFreeBytes else { return nil }
+        let freeGB = Double(free) / 1_073_741_824
+        if freeGB >= 1 {
+            return String(format: "%.0f GB %@", freeGB, model.copy(.diskFree))
+        }
         return "\(ByteCountFormatter.string(fromByteCount: free, countStyle: .file)) \(model.copy(.diskFree))"
     }
 
     @ViewBuilder
     private var insight: some View {
-        if model.statusKind == .attention {
+        if model.statusKind == .attention
+            || model.statusKind == .elevated
+            || model.statusKind == .connectedNotCharging,
+           !model.cycleUsageIsPrimaryStatus {
+            let isCritical = model.statusKind == .attention
+            let isElevated = model.statusKind == .elevated
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "exclamationmark.triangle.fill")
+                Image(systemName: isCritical
+                    ? "exclamationmark.octagon.fill"
+                    : (isElevated ? "exclamationmark.triangle.fill" : "powerplug.fill"))
                     .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(CelliumBrand.warning)
+                    .foregroundStyle(isCritical
+                        ? CelliumBrand.critical
+                        : (isElevated ? CelliumBrand.warning : CelliumBrand.accentStrong))
                 Text(model.statusExplanation)
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(CelliumBrand.foreground)
@@ -742,6 +1320,197 @@ struct CelliumDashboardView: View {
                     .stroke(CelliumBrand.border, lineWidth: 1)
             }
             .padding(.top, 12)
+        }
+    }
+
+    @ViewBuilder
+    private var cycleUsage: some View {
+        if let summary = model.cycleUsageSummary, model.cyclePlanConfiguration.enabled {
+            let batteryUsePausedByPower = model.isBatteryUseCurrentlyPausedByExternalPower
+            let color = batteryUsePausedByPower ? CelliumBrand.signal : cycleStatusColor(summary.status)
+            let maximum = max(120, ceil(summary.todayUsagePercent / 100) * 100)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Label(
+                        model.language == .spanish ? "Uso de batería" : "Battery use",
+                        systemImage: "gauge.with.dots.needle.67percent"
+                    )
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    Spacer()
+                     Text(
+                         batteryUsePausedByPower
+                             ? (model.language == .spanish ? "EN CARGA" : "CHARGING")
+                             : cycleStatusLabel(summary.status)
+                     )
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .foregroundStyle(color)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(color.opacity(0.14), in: Capsule())
+                }
+
+                HStack(alignment: .lastTextBaseline, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(String(format: "%.0f%%", summary.todayUsagePercent))
+                            .font(.system(size: 28, weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(color)
+                         Text(String(
+                             format: model.language == .spanish ? "%.2f EFC hoy" : "%.2f EFC today",
+                             summary.todayEquivalentCycles
+                         ))
+                             .font(.system(size: 9, weight: .medium, design: .monospaced))
+                             .foregroundStyle(CelliumBrand.muted)
+                         if batteryUsePausedByPower {
+                             Text(model.language == .spanish
+                                 ? "Ahora: sin descarga activa"
+                                 : "Now: no active discharge")
+                                 .font(.system(size: 9, weight: .semibold, design: .rounded))
+                                 .foregroundStyle(CelliumBrand.signal)
+                         }
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(summary.currentCycleCount.map { "\($0)" } ?? "—")
+                            .font(.system(size: 18, weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                        Text(model.language == .spanish
+                            ? "ciclos · +\(summary.todayHardwareCycleDelta) hoy"
+                            : "cycles · +\(summary.todayHardwareCycleDelta) today")
+                            .font(.system(size: 9, weight: .medium, design: .rounded))
+                            .foregroundStyle(CelliumBrand.muted)
+                    }
+                }
+
+                GeometryReader { geometry in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(CelliumBrand.border.opacity(0.8))
+                        Capsule()
+                            .fill(color)
+                            .frame(width: geometry.size.width * min(1, summary.todayUsagePercent / maximum))
+                        Rectangle()
+                            .fill(CelliumBrand.foreground.opacity(0.65))
+                            .frame(width: 1, height: 12)
+                            .offset(x: geometry.size.width * 100 / maximum)
+                    }
+                }
+                .frame(height: 8)
+
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(cycleComparisonLabel(summary))
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .foregroundStyle(CelliumBrand.muted)
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text(cycleWeekLabel(summary))
+                        Text(cycleConfidenceLabel(summary.confidence))
+                    }
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundStyle(CelliumBrand.muted)
+                }
+
+                if let budget = summary.weeklyBudget, budget > 0 {
+                    GeometryReader { geometry in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(CelliumBrand.border.opacity(0.65))
+                            Capsule()
+                                .fill(color.opacity(0.85))
+                                .frame(width: geometry.size.width * min(1, summary.weekEquivalentCycles / budget))
+                            if let projected = summary.projectedWeekEquivalentCycles {
+                                Rectangle()
+                                    .fill(projected > budget ? CelliumBrand.critical : CelliumBrand.foreground.opacity(0.65))
+                                    .frame(width: 1, height: 8)
+                                    .offset(x: geometry.size.width * min(1, projected / budget))
+                            }
+                        }
+                    }
+                    .frame(height: 5)
+                    .accessibilityLabel(model.language == .spanish
+                        ? "Progreso semanal del presupuesto de ciclos"
+                        : "Weekly cycle budget progress")
+                }
+            }
+            .padding(12)
+            .background(CelliumBrand.surface, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .stroke(color.opacity(0.45), lineWidth: 1)
+            }
+            .padding(.top, 12)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                model.language == .spanish
+                    ? String(format: "Uso de batería %.0f por ciento, %.2f ciclos equivalentes, más %d ciclos hoy", summary.todayUsagePercent, summary.todayEquivalentCycles, summary.todayHardwareCycleDelta)
+                    : String(format: "Battery use %.0f percent, %.2f equivalent cycles, plus %d cycles today", summary.todayUsagePercent, summary.todayEquivalentCycles, summary.todayHardwareCycleDelta)
+            )
+        }
+    }
+
+    private func cycleStatusColor(_ status: CyclePaceStatus) -> Color {
+        switch status {
+        case .high: return CelliumBrand.critical
+        case .elevated: return CelliumBrand.warning
+        case .onTrack: return CelliumBrand.signal
+        case .insufficientData: return CelliumBrand.muted
+        }
+    }
+
+    private func cycleStatusLabel(_ status: CyclePaceStatus) -> String {
+        switch (status, model.language) {
+        case (.high, .spanish): return "ALTO"
+        case (.elevated, .spanish): return "ELEVADO"
+        case (.onTrack, .spanish): return "EN RITMO"
+        case (.insufficientData, .spanish): return "APRENDIENDO"
+        case (.high, .english): return "HIGH"
+        case (.elevated, .english): return "ELEVATED"
+        case (.onTrack, .english): return "ON TRACK"
+        case (.insufficientData, .english): return "LEARNING"
+        }
+    }
+
+    private func cycleComparisonLabel(_ summary: CycleUsageSummary) -> String {
+        switch (summary.comparison, model.language) {
+        case (.lower, .spanish): return "Menor que lo habitual a esta hora"
+        case (.usual, .spanish): return "Dentro de lo habitual a esta hora"
+        case (.higher, .spanish): return "Mayor que lo habitual a esta hora"
+        case (.insufficientData, .spanish): return "Baseline: \(summary.baselineDayCount)/3 días"
+        case (.lower, .english): return "Lower than usual at this time"
+        case (.usual, .english): return "Within the usual range at this time"
+        case (.higher, .english): return "Higher than usual at this time"
+        case (.insufficientData, .english): return "Baseline: \(summary.baselineDayCount)/3 days"
+        }
+    }
+
+    private func cycleWeekLabel(_ summary: CycleUsageSummary) -> String {
+        if let budget = summary.weeklyBudget {
+            if let projected = summary.projectedWeekEquivalentCycles {
+                return String(
+                    format: model.language == .spanish
+                        ? "%.2f / %.1f · proy. %.1f EFC"
+                        : "%.2f / %.1f · proj. %.1f EFC",
+                    summary.weekEquivalentCycles,
+                    budget,
+                    projected
+                )
+            }
+            return String(format: "%.2f / %.1f EFC", summary.weekEquivalentCycles, budget)
+        }
+        if let projected = summary.projectedWeekEquivalentCycles {
+            return String(format: model.language == .spanish ? "semana ~%.1f EFC" : "week ~%.1f EFC", projected)
+        }
+        return String(format: model.language == .spanish ? "semana %.2f EFC" : "week %.2f EFC", summary.weekEquivalentCycles)
+    }
+
+    private func cycleConfidenceLabel(_ confidence: CycleUsageConfidence) -> String {
+        switch (confidence, model.language) {
+        case (.unavailable, .spanish): return "confianza no disponible"
+        case (.low, .spanish): return "confianza baja"
+        case (.medium, .spanish): return "confianza media"
+        case (.high, .spanish): return "confianza alta"
+        case (.unavailable, .english): return "confidence unavailable"
+        case (.low, .english): return "low confidence"
+        case (.medium, .english): return "medium confidence"
+        case (.high, .english): return "high confidence"
         }
     }
 
@@ -765,7 +1534,9 @@ struct CelliumDashboardView: View {
                 value: model.battery.cycleCount.map(String.init) ?? "—",
                 label: model.copy(.cycles),
                 qualitySymbol: model.battery.cycleCount == nil ? "questionmark.circle" : "checkmark.circle",
-                qualityLabel: model.battery.cycleCount == nil ? model.copy(.unavailable) : model.copy(.measured)
+                qualityLabel: model.battery.cycleCount == nil
+                    ? model.copy(.unavailable)
+                    : "\(model.copy(.measured)) · +\(model.cycleUsageSummary?.todayHardwareCycleDelta ?? 0) \(model.language == .spanish ? "hoy" : "today")"
             )
         }
         .padding(.vertical, 9)
@@ -790,7 +1561,7 @@ struct CelliumDashboardView: View {
                     set: { model.setHistoryRange($0) }
                 )) {
                     ForEach(HistoryRange.allCases) { range in
-                        Text(range.rawValue).tag(range)
+                        Text(range.label(for: model.language)).tag(range)
                     }
                 }
                 .labelsHidden()
@@ -798,7 +1569,7 @@ struct CelliumDashboardView: View {
                 .pickerStyle(.menu)
             }
             if model.isRefreshingHistory && model.historyAggregates.isEmpty {
-                HistoryLoadingView()
+                HistoryLoadingView(language: model.language)
                     .frame(height: 98)
                     .transition(.opacity)
             } else if model.historyAggregates.isEmpty {
@@ -866,23 +1637,33 @@ struct CelliumDashboardView: View {
     }
 
     private var appImpacts: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(model.copy(.appImpact))
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                Spacer()
-                 Text(model.copy(.appImpactDetail))
-                     .font(.system(size: 8, weight: .regular, design: .monospaced))
+        let applicationImpacts = model.processImpacts.filter { $0.kind == .application }
+        let otherImpacts = model.processImpacts.filter { $0.kind != .application }
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(model.copy(.appImpact))
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+            if applicationImpacts.isEmpty {
+                Text(model.copy(.noApplicationImpact))
+                    .font(.system(size: 10, weight: .regular, design: .rounded))
                     .foregroundStyle(CelliumBrand.muted)
-                    .lineLimit(1)
+            } else {
+                HStack(spacing: 8) {
+                    ForEach(applicationImpacts.prefix(3)) { impact in
+                        ProcessImpactItem(impact: impact)
+                            .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                    }
+                }
             }
-            if model.processImpacts.isEmpty {
+            Text(model.copy(.processImpact))
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .padding(.top, 5)
+            if otherImpacts.isEmpty {
                 Text(model.copy(.noAppImpact))
                     .font(.system(size: 10, weight: .regular, design: .rounded))
                     .foregroundStyle(CelliumBrand.muted)
             } else {
                 HStack(spacing: 8) {
-                    ForEach(model.processImpacts.prefix(3)) { impact in
+                    ForEach(otherImpacts.prefix(3)) { impact in
                         ProcessImpactItem(impact: impact)
                             .transition(.opacity.combined(with: .scale(scale: 0.96)))
                     }
@@ -907,7 +1688,11 @@ struct CelliumDashboardView: View {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: model.learnedBatterySymbol)
                     .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(model.statusKind == .attention ? CelliumBrand.warning : CelliumBrand.signal)
+                    .foregroundStyle(
+                         model.statusKind == .attention
+                             ? CelliumBrand.critical
+                             : (model.statusKind == .elevated ? CelliumBrand.warning : CelliumBrand.signal)
+                     )
                     .frame(width: 20)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(model.learnedBatteryTitle)
@@ -952,7 +1737,7 @@ struct CelliumDashboardView: View {
     private var settingsHeader: some View {
         HStack(spacing: 10) {
             Button {
-                model.setShowingSettings(false)
+                returnFromSettings()
             } label: {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 14, weight: .semibold))
@@ -977,6 +1762,92 @@ struct CelliumDashboardView: View {
         .padding(.horizontal, 16)
     }
 
+    private func returnFromSettings() {
+        navigate {
+            model.setShowingSettings(false)
+            selectedMenuPage = settingsReturnPage
+            switch settingsReturnPage {
+            case .dashboard:
+                showingHistoryPage = false
+                showingAlertsPage = false
+                model.setShowingAgent(false)
+            case .history:
+                showingHistoryPage = true
+                showingAlertsPage = false
+                model.setShowingAgent(false)
+                model.refreshHistory()
+            case .alerts:
+                showingHistoryPage = false
+                showingAlertsPage = true
+                model.setShowingAgent(false)
+                model.refreshHistory()
+            case .agent:
+                showingHistoryPage = false
+                showingAlertsPage = false
+                model.setShowingAgent(true)
+            }
+        }
+    }
+
+    private var settingsCategoryPicker: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 7) {
+                ForEach(SettingsCategory.allCases) { category in
+                    Button {
+                        navigate {
+                            selectedSettingsCategory = category
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: category.symbol)
+                                .font(.system(size: 11, weight: .semibold))
+                            Text(category.title(for: model.language))
+                                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        }
+                        .foregroundStyle(
+                            selectedSettingsCategory == category
+                                ? CelliumBrand.background
+                                : CelliumBrand.muted
+                        )
+                        .padding(.horizontal, 10)
+                        .frame(height: 30)
+                         .background {
+                             ZStack {
+                                 if selectedSettingsCategory == category {
+                                     Capsule()
+                                         .fill(CelliumBrand.signal)
+                                         .matchedGeometryEffect(id: "active-settings-category", in: settingsCategoryNamespace)
+                                 } else {
+                                     Capsule()
+                                         .fill(CelliumBrand.surface)
+                                 }
+                             }
+                         }
+
+                        .overlay {
+                            Capsule()
+                                .stroke(
+                                    selectedSettingsCategory == category
+                                        ? CelliumBrand.signal
+                                        : CelliumBrand.border,
+                                    lineWidth: 1
+                                )
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(category.title(for: model.language))
+                    .accessibilityAddTraits(selectedSettingsCategory == category ? .isSelected : [])
+                }
+            }
+             .padding(.vertical, 2)
+         }
+         .padding(.top, 4)
+         .padding(.bottom, 10)
+         .overlay(alignment: .bottom) {
+             Divider().overlay(CelliumBrand.border)
+         }
+    }
+
     private var settingsContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
@@ -996,10 +1867,17 @@ struct CelliumDashboardView: View {
                         .foregroundStyle(CelliumBrand.muted)
                 }
                 Spacer()
-            }
-            .padding(.bottom, 16)
+             }
+             .padding(.bottom, 16)
 
-            SettingsSection(title: model.copy(.general)) {
+             settingsCategoryPicker
+
+              ZStack(alignment: .topLeading) {
+                  VStack(alignment: .leading, spacing: 0) {
+                      Group {
+               if selectedSettingsCategory == .general {
+
+             SettingsSection(title: model.copy(.general)) {
                 SettingsRow(title: model.copy(.language)) {
                     Picker(model.copy(.language), selection: Binding(
                         get: { model.language },
@@ -1046,18 +1924,249 @@ struct CelliumDashboardView: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .disabled(model.isCheckingForUpdates)
-                }
-            }
+                 }
+             }
+             }
 
-            SettingsSection(title: model.copy(.sampling)) {
+             if selectedSettingsCategory == .assistant {
+                 SettingsSection(title: model.copy(.intelligence)) {
+                     VStack(alignment: .leading, spacing: 12) {
+                         HStack(alignment: .top, spacing: 10) {
+                             Image(systemName: "sparkles")
+                                 .font(.system(size: 15, weight: .semibold))
+                                 .foregroundStyle(CelliumBrand.signal)
+                             VStack(alignment: .leading, spacing: 3) {
+                                 Text(model.copy(.intelligenceEnabled))
+                                     .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                 Text(model.copy(.intelligenceEnabledDetail))
+                                     .font(.system(size: 10, weight: .regular, design: .rounded))
+                                     .foregroundStyle(CelliumBrand.muted)
+                                     .fixedSize(horizontal: false, vertical: true)
+                             }
+                             Spacer(minLength: 8)
+                             Toggle("", isOn: Binding(
+                                 get: { model.intelligenceConfiguration.enabled },
+                                 set: { model.setIntelligenceEnabled($0) }
+                             ))
+                             .labelsHidden()
+                             .toggleStyle(.switch)
+                             .accessibilityLabel(model.copy(.intelligenceEnabled))
+                         }
+
+                         HStack(spacing: 6) {
+                             ForEach(IntelligenceProvider.allCases) { provider in
+                                 Button {
+                                     model.setIntelligenceProvider(provider)
+                                 } label: {
+                                     Text(provider.displayName)
+                                         .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                         .foregroundStyle(
+                                             model.intelligenceConfiguration.provider == provider
+                                                 ? CelliumBrand.background
+                                                 : CelliumBrand.muted
+                                         )
+                                         .frame(maxWidth: .infinity)
+                                         .frame(height: 30)
+                                         .background(
+                                             model.intelligenceConfiguration.provider == provider
+                                                 ? CelliumBrand.signal
+                                                 : CelliumBrand.surface,
+                                             in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                         )
+                                 }
+                                 .buttonStyle(.plain)
+                                 .accessibilityAddTraits(model.intelligenceConfiguration.provider == provider ? .isSelected : [])
+                             }
+                         }
+
+                         if model.intelligenceConfiguration.provider == .openRouter {
+                             IntelligenceModelPicker(
+                                 modelID: Binding(
+                                     get: { model.intelligenceConfiguration.model },
+                                     set: { model.setIntelligenceModel($0) }
+                                 ),
+                                 language: model.language
+                             )
+
+                               VStack(alignment: .leading, spacing: 7) {
+                                   HStack(spacing: 6) {
+                                       Image(systemName: "lock.shield")
+                                           .font(.system(size: 11, weight: .semibold))
+                                           .foregroundStyle(CelliumBrand.signal)
+                                       Text(model.copy(.intelligenceAPIKey))
+                                           .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                       Spacer(minLength: 4)
+                                       if model.intelligenceAPIKeyConfigured {
+                                           Text(model.copy(.encryptedStored))
+                                               .font(.system(size: 8, weight: .semibold, design: .rounded))
+                                               .foregroundStyle(CelliumBrand.signal)
+                                       }
+                                   }
+                                    if replacingIntelligenceAPIKey || !model.intelligenceAPIKeyConfigured {
+                                       HStack(spacing: 7) {
+                                           SecureField("sk-or-…", text: $intelligenceAPIKey)
+                                               .textFieldStyle(.plain)
+                                               .font(.system(size: 10, weight: .regular, design: .monospaced))
+                                               .padding(.horizontal, 9)
+                                               .frame(height: 30)
+                                               .background(CelliumBrand.surface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                               .overlay {
+                                                   RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                                       .stroke(CelliumBrand.border, lineWidth: 1)
+                                            }
+                                            Button(model.language == .spanish ? "Guardar" : "Save") {
+                                                model.saveIntelligenceAPIKey(intelligenceAPIKey)
+                                                intelligenceAPIKey = ""
+                                                replacingIntelligenceAPIKey = false
+                                           }
+                                           .buttonStyle(.borderedProminent)
+                                           .tint(CelliumBrand.signal)
+                                           .controlSize(.small)
+                                            .disabled(
+                                                intelligenceAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                            )
+                                       }
+                                   } else {
+                                       Button {
+                                           replacingIntelligenceAPIKey = true
+                                       } label: {
+                                           Label(model.copy(.replaceAPIKey), systemImage: "arrow.triangle.2.circlepath")
+                                       }
+                                       .buttonStyle(.bordered)
+                                       .controlSize(.small)
+                                   }
+                                    Text(model.copy(.intelligenceAPIKeyDetail))
+                                       .font(.system(size: 9, weight: .regular, design: .rounded))
+                                       .foregroundStyle(CelliumBrand.muted)
+                               }
+                               .animation(.easeInOut(duration: 0.2), value: replacingIntelligenceAPIKey)
+                               .animation(.easeInOut(duration: 0.2), value: model.intelligenceAPIKeyConfigured)
+                               if model.intelligenceAPIKeyConfigured {
+                                   HStack(spacing: 6) {
+                                       Image(systemName: "checkmark.circle.fill")
+                                       Text(model.copy(.encryptedStored))
+                                       Spacer()
+                                       Button {
+                                           model.clearIntelligenceAPIKey()
+                                           replacingIntelligenceAPIKey = true
+                                       } label: {
+                                           Image(systemName: "trash")
+                                       }
+                                       .buttonStyle(.plain)
+                                       .foregroundStyle(CelliumBrand.warning)
+                                       .accessibilityLabel(model.language == .spanish ? "Eliminar API key cifrada" : "Delete encrypted API key")
+                                   }
+                                   .font(.system(size: 10, weight: .medium, design: .rounded))
+                                   .foregroundStyle(CelliumBrand.signal)
+                               }
+                         } else {
+                             SettingsRow(title: model.copy(.ollamaURL)) {
+                                 TextField(
+                                     "http://127.0.0.1:11434",
+                                     text: Binding(
+                                         get: { model.intelligenceConfiguration.ollamaEndpoint },
+                                         set: { model.setOllamaEndpoint($0) }
+                                     )
+                                 )
+                                 .textFieldStyle(.roundedBorder)
+                                 .frame(width: 174)
+                             }
+                             SettingsRow(title: model.copy(.intelligenceModel)) {
+                                 TextField(
+                                     "llama3.2",
+                                     text: Binding(
+                                         get: { model.intelligenceConfiguration.model },
+                                         set: { model.setIntelligenceModel($0) }
+                                     )
+                                 )
+                                 .textFieldStyle(.roundedBorder)
+                                 .frame(width: 174)
+                             }
+                         }
+
+                         HStack(spacing: 8) {
+                             Button {
+                                 model.validateIntelligenceProvider()
+                             } label: {
+                                 Label(model.copy(.validateProvider), systemImage: "checkmark.shield")
+                             }
+                             .buttonStyle(.bordered)
+                             .controlSize(.small)
+                             .disabled(model.isValidatingIntelligenceProvider)
+                             if model.isValidatingIntelligenceProvider {
+                                 ProgressView()
+                                     .controlSize(.small)
+                                     .tint(CelliumBrand.signal)
+                             }
+                             Spacer()
+                         }
+                         if let validationMessage = model.intelligenceValidationMessage {
+                             SettingsInfoRow(text: validationMessage)
+                                 .foregroundStyle(validationMessage == (model.language == .spanish ? "Proveedor disponible" : "Provider available") ? CelliumBrand.signal : CelliumBrand.warning)
+                         }
+
+                         Divider().overlay(CelliumBrand.border)
+
+                         HStack(alignment: .top, spacing: 10) {
+                             VStack(alignment: .leading, spacing: 3) {
+                                 Text(model.copy(.intelligenceAutomatic))
+                                     .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                 Text(model.copy(.intelligenceAutomaticDetail))
+                                     .font(.system(size: 9, weight: .regular, design: .rounded))
+                                     .foregroundStyle(CelliumBrand.muted)
+                             }
+                             Spacer()
+                             Toggle("", isOn: Binding(
+                                 get: { model.intelligenceConfiguration.automaticAnalysisEnabled },
+                                 set: { model.setIntelligenceAutomaticAnalysisEnabled($0) }
+                             ))
+                             .labelsHidden()
+                             .toggleStyle(.switch)
+                             .accessibilityLabel(model.copy(.intelligenceAutomatic))
+                         }
+
+                         HStack(spacing: 8) {
+                             Image(systemName: model.wifiAvailable ? "wifi" : "wifi.slash")
+                                 .foregroundStyle(model.wifiAvailable ? CelliumBrand.signal : CelliumBrand.muted)
+                             Text(model.wifiAvailable ? model.copy(.intelligenceWiFiOnly) : model.copy(.wifiUnavailable))
+                                 .font(.system(size: 9, weight: .regular, design: .rounded))
+                                 .foregroundStyle(CelliumBrand.muted)
+                             Spacer()
+                             Button {
+                                 model.requestIntelligenceAnalysis()
+                             } label: {
+                                 Label(model.copy(.intelligenceAnalyze), systemImage: "sparkles")
+                             }
+                             .buttonStyle(.borderedProminent)
+                             .tint(CelliumBrand.signal)
+                             .controlSize(.small)
+                             .disabled(model.isGeneratingIntelligence)
+                         }
+
+                         if let error = model.intelligenceError {
+                             Text(error)
+                                 .font(.system(size: 10, weight: .regular, design: .rounded))
+                                 .foregroundStyle(CelliumBrand.warning)
+                                 .fixedSize(horizontal: false, vertical: true)
+                         }
+                     }
+                 }
+             }
+
+             if selectedSettingsCategory == .monitoring {
+             SettingsSection(title: model.copy(.sampling)) {
                 SettingsRow(
                     title: model.copy(.samplingMode),
                     detail: model.copy(.samplingDescription)
                 ) {
-                    Picker(model.copy(.sampling), selection: Binding(
-                        get: { model.samplingPreference },
-                        set: { model.setSamplingPreference($0) }
-                    )) {
+                     Picker(model.copy(.sampling), selection: Binding(
+                         get: { model.samplingPreference },
+                         set: { preference in
+                             withAnimation(.easeInOut(duration: 0.22)) {
+                                 model.setSamplingPreference(preference)
+                             }
+                         }
+                     )) {
                         Text(model.copy(.systemDefault)).tag(SamplingPreference.systemDefault)
                         Text(model.copy(.efficient)).tag(SamplingPreference.efficient)
                         Text(model.copy(.responsive)).tag(SamplingPreference.responsive)
@@ -1067,57 +2176,46 @@ struct CelliumDashboardView: View {
                     .pickerStyle(.menu)
                 }
 
-                SettingsRow(
-                    title: model.copy(.customInterval),
-                    detail: String(format: model.copy(.activeIntervalValue), model.activeSamplingIntervalSeconds)
-                ) {
-                    HStack(spacing: 5) {
-                        TextField(
-                            "",
-                            value: Binding(
-                                get: { model.customSamplingIntervalSeconds },
-                                set: { model.setCustomSamplingInterval(Double($0), activate: true) }
-                            ),
-                            format: .number
-                        )
-                        .textFieldStyle(.roundedBorder)
-                        .multilineTextAlignment(.trailing)
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        .frame(width: 62, height: 28)
-                        Text("s")
-                            .font(.system(size: 11, weight: .semibold, design: .rounded))
-                            .foregroundStyle(CelliumBrand.muted)
-                        Stepper(
-                            "",
-                            value: Binding(
-                                get: { model.customSamplingIntervalSeconds },
-                                set: { model.setCustomSamplingInterval(Double($0), activate: true) }
-                            ),
-                            in: 1...3_600
-                        )
-                        .labelsHidden()
-                    }
-                    .accessibilityElement(children: .contain)
-                    .accessibilityLabel(model.copy(.customInterval))
-                }
+                 if model.samplingPreference == .custom {
+                     SettingsRow(
+                         title: model.copy(.customInterval),
+                         detail: String(format: model.copy(.activeIntervalValue), model.activeSamplingIntervalSeconds)
+                     ) {
+                         HStack(spacing: 5) {
+                             TextField(
+                                 "",
+                                 value: Binding(
+                                     get: { model.customSamplingIntervalSeconds },
+                                     set: { model.setCustomSamplingInterval(Double($0), activate: false) }
+                                 ),
+                                 format: .number
+                             )
+                             .textFieldStyle(.roundedBorder)
+                             .multilineTextAlignment(.trailing)
+                             .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                             .frame(width: 62, height: 28)
+                             Text("s")
+                                 .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                 .foregroundStyle(CelliumBrand.muted)
+                             Stepper(
+                                 "",
+                                 value: Binding(
+                                     get: { model.customSamplingIntervalSeconds },
+                                     set: { model.setCustomSamplingInterval(Double($0), activate: false) }
+                                 ),
+                                 in: 1...3_600
+                             )
+                             .labelsHidden()
+                         }
+                         .accessibilityElement(children: .contain)
+                         .accessibilityLabel(model.copy(.customInterval))
+                     }
+                     .transition(.opacity.combined(with: .move(edge: .top)))
+                 }
+             }
+             .animation(.easeInOut(duration: 0.22), value: model.samplingPreference)
 
-                if model.samplingPreference != .custom {
-                    HStack {
-                        Spacer()
-                        Button {
-                            model.setSamplingPreference(.custom)
-                        } label: {
-                            Label(model.copy(.useCustomInterval), systemImage: "checkmark.circle")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(CelliumBrand.signal)
-                        .controlSize(.small)
-                    }
-                    .padding(.top, 4)
-                }
-            }
-
-            SettingsSection(title: model.copy(.learning)) {
+              SettingsSection(title: model.copy(.learning)) {
                 SettingsRow(
                     title: model.copy(.learningToggle),
                     detail: model.copy(.learningToggleDetail)
@@ -1129,10 +2227,125 @@ struct CelliumDashboardView: View {
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .accessibilityLabel(model.copy(.learningToggle))
+                  }
                 }
-            }
 
-            SettingsSection(title: model.copy(.alerts)) {
+               SettingsSection(title: model.language == .spanish ? "Battery Plan" : "Battery Plan") {
+                   SettingsRow(
+                       title: model.language == .spanish ? "Seguimiento de ciclos" : "Cycle tracking",
+                       detail: model.language == .spanish
+                           ? "Mide EFC, cambios reales y ritmo diario sin confundirlos con salud."
+                           : "Tracks EFC, measured changes, and daily pace without confusing them with health."
+                   ) {
+                       Toggle("", isOn: Binding(
+                           get: { model.cyclePlanConfiguration.enabled },
+                           set: { model.setCyclePlanEnabled($0) }
+                       ))
+                       .labelsHidden()
+                       .toggleStyle(.switch)
+                   }
+
+                   if model.cyclePlanConfiguration.enabled {
+                       SettingsRow(
+                           title: model.language == .spanish ? "Tipo de plan" : "Plan type",
+                           detail: model.language == .spanish
+                               ? "Automático, presupuesto semanal u objetivo por fecha."
+                               : "Automatic, weekly budget, or target date."
+                       ) {
+                           Picker("", selection: Binding(
+                               get: { model.cyclePlanConfiguration.mode },
+                               set: { model.setCyclePlanMode($0) }
+                           )) {
+                               Text(model.language == .spanish ? "Automático" : "Automatic").tag(CyclePlanMode.automatic)
+                               Text(model.language == .spanish ? "Semanal" : "Weekly").tag(CyclePlanMode.weeklyBudget)
+                               Text(model.language == .spanish ? "Por fecha" : "By date").tag(CyclePlanMode.targetDate)
+                           }
+                           .labelsHidden()
+                           .pickerStyle(.menu)
+                       }
+
+                       if model.cyclePlanConfiguration.mode == .weeklyBudget {
+                           ThresholdRow(
+                               title: model.language == .spanish ? "Presupuesto semanal" : "Weekly budget",
+                               value: String(format: "%.1f EFC", model.cyclePlanConfiguration.weeklyEquivalentCycleBudget),
+                               slider: Binding(
+                                   get: { model.cyclePlanConfiguration.weeklyEquivalentCycleBudget },
+                                   set: { model.setCycleWeeklyBudget($0) }
+                               ),
+                               range: 0.5...21
+                           )
+                       }
+
+                       if model.cyclePlanConfiguration.mode == .targetDate {
+                           SettingsRow(
+                               title: model.language == .spanish ? "Fecha objetivo" : "Target date",
+                               detail: model.language == .spanish
+                                   ? "Cellium calcula el presupuesto semanal restante."
+                                   : "Cellium calculates the remaining weekly budget."
+                           ) {
+                               DatePicker(
+                                   "",
+                                   selection: Binding(
+                                       get: {
+                                           model.cyclePlanConfiguration.targetDate
+                                               ?? Calendar.autoupdatingCurrent.date(byAdding: .year, value: 1, to: Date())!
+                                       },
+                                       set: { model.setCycleTargetDate($0) }
+                                   ),
+                                   in: Date()...,
+                                   displayedComponents: .date
+                               )
+                               .labelsHidden()
+                               .controlSize(.small)
+                           }
+                           SettingsRow(
+                               title: model.language == .spanish ? "Máximo de ciclos" : "Maximum cycles",
+                               detail: model.language == .spanish
+                                   ? "Meta de contador para esa fecha."
+                                   : "Hardware counter target for that date."
+                           ) {
+                               Stepper(
+                                   value: Binding(
+                                       get: {
+                                           model.cyclePlanConfiguration.targetCycleCount
+                                               ?? (model.battery.cycleCount ?? 0) + 100
+                                       },
+                                       set: { model.setCycleTargetCount($0) }
+                                   ),
+                                   in: (model.battery.cycleCount ?? 0)...max(5_000, (model.battery.cycleCount ?? 0) + 1)
+                               ) {
+                                   Text("\(model.cyclePlanConfiguration.targetCycleCount ?? (model.battery.cycleCount ?? 0) + 100)")
+                                       .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                               }
+                           }
+                       }
+
+                       SettingsRow(
+                           title: model.language == .spanish ? "Avisos de ritmo" : "Pace alerts",
+                           detail: model.language == .spanish
+                               ? "Ámbar desde 1 EFC; rojo desde 2 EFC o +2 ciclos en 24 h."
+                               : "Amber from 1 EFC; red from 2 EFC or +2 cycles in 24h."
+                       ) {
+                           Toggle("", isOn: Binding(
+                               get: { model.cyclePlanConfiguration.alertsEnabled },
+                               set: { model.setCycleAlertsEnabled($0) }
+                           ))
+                           .labelsHidden()
+                           .toggleStyle(.switch)
+                       }
+
+                       SettingsInfoRow(text: model.language == .spanish
+                           ? "Los EFC son una estimación local por amperaje/capacidad. El contador de ciclos sigue siendo la medición de macOS."
+                           : "EFC is a local current/capacity estimate. The cycle counter remains the macOS measurement.")
+                   }
+               }
+               .animation(.easeInOut(duration: 0.22), value: model.cyclePlanConfiguration.mode)
+               }
+
+               if selectedSettingsCategory == .general {
+
+              SettingsSection(title: model.copy(.alerts)) {
+
                 ThresholdRow(
                     title: model.copy(.temperatureThreshold),
                     value: String(format: "%.0f °C", model.temperatureAlertCelsius),
@@ -1150,10 +2363,12 @@ struct CelliumDashboardView: View {
                         set: { model.setCriticalChargePercent($0) }
                     ),
                     range: 5...40
-                )
-            }
+                 )
+             }
+             }
 
-            SettingsSection(title: model.copy(.weather)) {
+              if selectedSettingsCategory == .general {
+             SettingsSection(title: model.copy(.weather)) {
                 SettingsRow(title: model.copy(.locationSource)) {
                     Picker(model.copy(.weather), selection: Binding(
                         get: { model.weatherLocationMode },
@@ -1231,7 +2446,7 @@ struct CelliumDashboardView: View {
                 }
             }
 
-            if case let .supported(current, range) = model.chargeLimitCapability {
+             if case let .supported(current, range) = model.chargeLimitCapability {
                 SettingsSection(title: model.copy(.chargeLimit)) {
                     SettingsRow(
                         title: "\(current)%",
@@ -1244,10 +2459,12 @@ struct CelliumDashboardView: View {
                         )
                         .disabled(true)
                     }
-                }
-            }
+                 }
+             }
+             }
 
-            SettingsSection(title: model.copy(.data)) {
+              if selectedSettingsCategory == .general {
+             SettingsSection(title: model.copy(.data)) {
                 SettingsRow(
                     title: model.copy(.localData),
                     detail: model.storeDiagnostics.map {
@@ -1261,11 +2478,23 @@ struct CelliumDashboardView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                }
-            }
+                 }
+             }
+               }
 
-        }
-        .padding(.horizontal, 22)
+                  }
+                  }
+                  .id(selectedSettingsCategory)
+
+                 .transition(pageTransition)
+             }
+             .frame(maxWidth: .infinity, alignment: .leading)
+             .clipped()
+             .animation(motion, value: selectedSettingsCategory)
+
+         }
+         .padding(.horizontal, 22)
+
         .padding(.top, 16)
         .padding(.bottom, 26)
     }
@@ -1439,7 +2668,8 @@ private struct CompactSystemMetric: View {
                         .font(.system(size: 8, weight: .regular, design: .monospaced))
                         .foregroundStyle(CelliumBrand.muted.opacity(0.8))
                         .lineLimit(1)
-                        .truncationMode(.middle)
+                        .minimumScaleFactor(0.7)
+                        .allowsTightening(true)
                 }
             }
         }
@@ -1491,6 +2721,15 @@ private struct ProcessImpactItem: View {
         return "RAM —"
     }
 
+    private var fallbackSymbol: String {
+        switch impact.kind {
+        case .application: return "app.dashed"
+        case .daemon: return "gearshape.2.fill"
+        case .script: return "scroll.fill"
+        case .process: return "terminal.fill"
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
@@ -1500,19 +2739,16 @@ private struct ProcessImpactItem: View {
                         .scaledToFit()
                         .frame(width: 20, height: 20)
                 } else {
-                    Image(systemName: "app.dashed")
+                    Image(systemName: fallbackSymbol)
                         .font(.system(size: 17, weight: .medium))
                         .foregroundStyle(CelliumBrand.muted)
                         .frame(width: 20, height: 20)
                 }
-                Circle()
-                    .fill(intensityColor)
-                    .frame(width: 6, height: 6)
+                Text(impact.name)
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
-            Text(impact.name)
-                .font(.system(size: 10, weight: .semibold, design: .rounded))
-                .lineLimit(1)
-                .truncationMode(.middle)
             Text(batteryRateLabel)
                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
                 .foregroundStyle(intensityColor)
@@ -1537,6 +2773,7 @@ private struct ProcessImpactItem: View {
 }
 
 private struct HistoryLoadingView: View {
+    let language: CelliumLanguage
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var phase: CGFloat = 0
 
@@ -1554,7 +2791,7 @@ private struct HistoryLoadingView: View {
         }
         .padding(.horizontal, 43)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Loading history")
+        .accessibilityLabel(language == .spanish ? "Cargando historial" : "Loading history")
         .onAppear {
             guard !reduceMotion else { return }
             withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) {

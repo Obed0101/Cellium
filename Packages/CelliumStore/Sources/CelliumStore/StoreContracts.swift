@@ -8,6 +8,7 @@ public struct StoreConfiguration: Sendable, Equatable {
     public let quarterHourRetentionDays: Int
     public let dailyRetentionDays: Int?
     public let alertRetentionDays: Int
+    public let intelligenceAnalysisRetentionDays: Int
 
     public init(
         rawRetentionDays: Int = 7,
@@ -15,7 +16,8 @@ public struct StoreConfiguration: Sendable, Equatable {
         minuteRetentionDays: Int = 90,
         quarterHourRetentionDays: Int = 730,
         dailyRetentionDays: Int? = nil,
-        alertRetentionDays: Int = 365
+        alertRetentionDays: Int = 365,
+        intelligenceAnalysisRetentionDays: Int = 365
     ) {
         self.rawRetentionDays = max(1, rawRetentionDays)
         self.rawSampleLimit = max(1_000, rawSampleLimit)
@@ -23,14 +25,25 @@ public struct StoreConfiguration: Sendable, Equatable {
         self.quarterHourRetentionDays = max(1, quarterHourRetentionDays)
         self.dailyRetentionDays = dailyRetentionDays.map { max(1, $0) }
         self.alertRetentionDays = max(1, alertRetentionDays)
+        self.intelligenceAnalysisRetentionDays = max(1, intelligenceAnalysisRetentionDays)
     }
 }
 
 public typealias StoredBatterySample = BatterySample
+public typealias StoredCycleUsageBucket = CycleUsageBucket
+public typealias StoredCycleUsageTrackerState = CycleUsageTrackerState
+
+public enum StoredProcessKind: String, Codable, CaseIterable, Sendable {
+    case application
+    case daemon
+    case script
+    case process
+}
 
 public struct StoredProcessSample: Codable, Equatable, Sendable {
     public let processID: Int32
     public let name: String
+    public let kind: StoredProcessKind
     public let timestamp: Date
     public let cpuPercent: Double
     public let residentMemoryBytes: Int64?
@@ -40,6 +53,7 @@ public struct StoredProcessSample: Codable, Equatable, Sendable {
     public init(
         processID: Int32,
         name: String,
+        kind: StoredProcessKind = .process,
         timestamp: Date,
         cpuPercent: Double,
         residentMemoryBytes: Int64? = nil,
@@ -48,11 +62,35 @@ public struct StoredProcessSample: Codable, Equatable, Sendable {
     ) {
         self.processID = processID
         self.name = name
+        self.kind = kind
         self.timestamp = timestamp
         self.cpuPercent = cpuPercent
         self.residentMemoryBytes = residentMemoryBytes
         self.memoryPercent = memoryPercent
         self.estimatedBatteryPercentPerMinute = estimatedBatteryPercentPerMinute
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case processID
+        case name
+        case kind
+        case timestamp
+        case cpuPercent
+        case residentMemoryBytes
+        case memoryPercent
+        case estimatedBatteryPercentPerMinute
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.processID = try container.decode(Int32.self, forKey: .processID)
+        self.name = try container.decode(String.self, forKey: .name)
+        self.kind = try container.decodeIfPresent(StoredProcessKind.self, forKey: .kind) ?? .process
+        self.timestamp = try container.decode(Date.self, forKey: .timestamp)
+        self.cpuPercent = try container.decode(Double.self, forKey: .cpuPercent)
+        self.residentMemoryBytes = try container.decodeIfPresent(Int64.self, forKey: .residentMemoryBytes)
+        self.memoryPercent = try container.decodeIfPresent(Double.self, forKey: .memoryPercent)
+        self.estimatedBatteryPercentPerMinute = try container.decodeIfPresent(Double.self, forKey: .estimatedBatteryPercentPerMinute)
     }
 }
 
@@ -100,6 +138,72 @@ public struct StoredAlertEvent: Codable, Equatable, Sendable {
         self.severity = severity
         self.subject = subject
         self.measurements = measurements
+    }
+}
+
+public enum StoredIntelligenceRunKind: String, Codable, CaseIterable, Sendable {
+    case analysis
+    case chat
+}
+
+public enum StoredIntelligenceRunStatus: String, Codable, CaseIterable, Sendable {
+    case running
+    case succeeded
+    case failed
+}
+
+public struct StoredIntelligenceAnalysis: Codable, Equatable, Identifiable, Sendable {
+    public let id: UUID
+    public let requestedAt: Date
+    public let completedAt: Date?
+    public let kind: StoredIntelligenceRunKind
+    public let provider: String
+    public let model: String
+    public let languageCode: String
+    public let prompt: String
+    public let response: String?
+    public let status: StoredIntelligenceRunStatus
+    public let errorMessage: String?
+    public let title: String?
+    public let severity: String?
+    public let confidence: String?
+    public let evidence: [String]
+    public let recommendations: [String]
+
+    public init(
+        id: UUID = UUID(),
+        requestedAt: Date = Date(),
+        completedAt: Date? = nil,
+        kind: StoredIntelligenceRunKind,
+        provider: String,
+        model: String,
+        languageCode: String,
+        prompt: String,
+        response: String? = nil,
+        status: StoredIntelligenceRunStatus,
+        errorMessage: String? = nil,
+        title: String? = nil,
+        severity: String? = nil,
+        confidence: String? = nil,
+        evidence: [String] = [],
+        recommendations: [String] = []
+    ) {
+        self.id = id
+        self.requestedAt = requestedAt
+        self.completedAt = completedAt
+        self.kind = kind
+        self.provider = provider
+        self.model = model
+        self.languageCode = languageCode
+        self.prompt = prompt
+        self.response = response
+        self.status = status
+        self.errorMessage = errorMessage
+        self.title = title
+        self.severity = severity
+        self.confidence = confidence
+        self.evidence = evidence
+        self.recommendations = recommendations
     }
 }
 

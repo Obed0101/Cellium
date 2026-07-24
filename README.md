@@ -16,12 +16,13 @@
 
 Cellium is a native macOS menu bar app for understanding what is happening to your Mac's battery and power system. It collects the signals macOS exposes, keeps history in local SQLite storage, explains patterns without pretending that estimates are measurements, and gives you an optional AI assistant grounded in the same evidence.
 
-The current public release is **Cellium 0.1.8**.
+The current public release is **Cellium 0.1.10**.
 
 ## What Cellium answers
 
 - **What is happening right now?** Battery level, active cells, charging state, power source, temperature, weather context, health and cycle count.
 - **What changed over time?** Battery charge, power, temperature, CPU, memory, disk and process history across selectable time windows.
+- **How quickly am I using battery cycles?** Battery Plan estimates equivalent full cycles (EFC), preserves measured hardware-counter changes and compares today's pace with your own history.
 - **What is using the Mac?** Hourly Computer use estimates based on observed CPU and memory activity, plus process-level history and estimated battery impact.
 - **Should I take action?** Deterministic alerts, local learning and optional macOS notifications surface conditions that have enough evidence to matter.
 - **What does the AI know?** The optional assistant receives structured Cellium evidence, separates measured facts from estimates, keeps chat history locally and shows analysis logs with the prompt, response and local evidence.
@@ -70,6 +71,7 @@ These screenshots show the current Cellium interface, including the live dashboa
 - Battery percentage and active-cell visualization.
 - Charging state, power source, power draw and temperature.
 - Battery health and cycle count shown as separate signals.
+- Battery Plan card with unclamped daily EFC, measured cycle deltas, personal pace, weekly budget and confidence-aware forecasts.
 - Thermal state, Low Power Mode, CPU, memory and disk status.
 - Optional weather context with temperature, condition, humidity and wind.
 - Clear “measured”, “calculated”, “estimated” and “no data” boundaries.
@@ -81,6 +83,7 @@ These screenshots show the current Cellium interface, including the live dashboa
 - Interactive charts with hover details for charge, power, temperature, CPU, memory and disk activity.
 - Time windows keep their real resolution instead of silently collapsing everything into a misleading 24-hour average.
 - Missing readings remain missing instead of being replaced with invented precision.
+- Equivalent-use history uses 15-minute data for short windows and daily buckets for long windows, including hardware deltas, quality and observation gaps.
 
 ### Computer use and local learning
 
@@ -95,6 +98,7 @@ These screenshots show the current Cellium interface, including the live dashboa
 
 - Persistent alert history for battery, thermal, power and resource conditions.
 - Proactive alerts with severity, measurements and a clear explanation of the trigger.
+- Cycle-pace alerts distinguish elevated use from confirmed battery damage and prioritize critical `2 EFC / +2 cycles in 24h` signals.
 - Alerts can be reviewed, grouped by day and cleared from the Alerts surface.
 - Packaged app builds can request macOS notification permission and deliver proactive alerts through Notification Center.
 - Notification behavior is opt-in through the system permission flow; direct SwiftPM development launches do not pretend to be a packaged notification-capable app.
@@ -107,10 +111,14 @@ The AI layer is available now as an opt-in feature. Normal monitoring does not r
 - **Models:** a built-in OpenRouter catalog with recommended, budget, fast, balanced and free options, plus custom model support.
 - **Chat:** persistent local sessions, session titles, clear/new-session controls and battery-focused conversations.
 - **Analysis:** manual analysis and optional automatic analysis, limited to one short request per hour when enabled and Wi-Fi is available.
-- **Evidence:** structured battery, power, temperature, health, cycle, system, process, weather and learning context.
-- **Analysis log:** prompt, response, provider, model, status, evidence and recommendations are visible in the Alerts surface.
-- **Response formatting:** AI responses are rendered as Markdown and repaired when a provider joins sentences or returns escaped line breaks.
-- **Safety:** the assistant must distinguish measured facts from estimates, acknowledge missing history and avoid diagnosing battery damage without supporting evidence.
+- **Evidence:** structured battery, power, temperature, health, hardware-cycle, EFC pace, budget, system, process, weather and learning context.
+- **Device and time context:** the Mac model identifier, macOS version, architecture, Cellium version, local date/time, timezone identifier, UTC offset, local hour, weekday and daylight-saving state are included when available.
+- **Weather context:** the assistant can receive the weather location label, location timezone, condition, temperature, apparent temperature, humidity and wind. The weather location timezone is preferred; macOS's current timezone is the fallback.
+- **Computer-use profile:** up to seven days of hourly CPU/memory aggregates are summarized as estimated active hours per day, typical start/end hours, peak hour and an hourly activity profile. This is an estimate of computer activity, not proof that a person was present.
+- **Privacy:** process names are replaced with generic labels such as `application-1` or `process-2`; CPU, memory and estimated battery impact are retained. No extra IP-location lookup is performed by the AI context builder.
+- **Analysis log:** prompt, response, provider, model, status, evidence and recommendations are visible in the Alerts surface and stored locally.
+- **Response formatting:** AI responses render paragraphs, headings, lists, quotes and code as separate Markdown blocks while preserving inline formatting and escaped line breaks.
+- **Safety:** the assistant must distinguish measured facts from estimates, acknowledge missing history, keep battery health separate from hardware cycles and EFC, and avoid diagnosing battery damage without supporting evidence.
 
 ### Local secrets and privacy controls
 
@@ -161,7 +169,7 @@ Intel compatibility, exact per-process wattage, charge automation and Apple-nota
 
 ## Install the latest release
 
-Download the current DMG from [GitHub Releases](https://github.com/Obed0101/Cellium/releases/latest). The current artifact is `Cellium-0.1.8.dmg`.
+Download the current DMG from [GitHub Releases](https://github.com/Obed0101/Cellium/releases/latest). The current artifact is `Cellium-0.1.10.dmg`.
 
 The disk image contains `Cellium.app` and an `Applications` shortcut for drag-to-install. The free release is ad-hoc signed, not Apple-notarized, and macOS may require **System Settings → Privacy & Security → Open Anyway** on first launch. See [Documentation/DISTRIBUTION.md](Documentation/DISTRIBUTION.md) for Developer ID signing and notarization.
 
@@ -185,7 +193,7 @@ To create a local drag-to-Applications installer:
 
 ```bash
 ./Scripts/build-dmg.sh
-open Distribution/Cellium-0.1.8.dmg
+open Distribution/Cellium-0.1.10.dmg
 ```
 
 The distribution script validates the app bundle and DMG. It refuses to overwrite an existing disk image and supports Developer ID signing when configured. See [Documentation/DISTRIBUTION.md](Documentation/DISTRIBUTION.md).

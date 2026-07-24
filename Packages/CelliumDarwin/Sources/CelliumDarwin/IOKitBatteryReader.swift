@@ -27,19 +27,20 @@ public struct IOKitBatteryReader: BatteryReader, Sendable {
         )
         let isCharging = boolean(powerSource?["Is Charging"]) ?? boolean(registry["IsCharging"]) ?? false
         let fullyCharged = boolean(powerSource?["Fully Charged"]) ?? boolean(registry["FullyCharged"]) ?? false
-        let externalConnected = boolean(powerSource?["External Connected"])
+        let sourceState = powerSourceState(powerSource?["Power Source State"])
+        let externalConnected = (boolean(powerSource?["External Connected"])
             ?? boolean(registry["ExternalConnected"])
-            ?? false
+            ?? false) || sourceState == .adapter
 
         let rawAmperage = signedMilliamps(registry["Amperage"])
         let rawInstantAmperage = signedMilliamps(registry["InstantAmperage"])
-        let sourceState = powerSourceState(powerSource?["Power Source State"])
         let timeToFull = BatteryMath.rejectTimeSentinel(
             integer(powerSource?["Time to Full"]) ?? integer(registry["AvgTimeToFull"])
         )
         let timeToEmpty = BatteryMath.rejectTimeSentinel(
             integer(powerSource?["Time to Empty"]) ?? integer(registry["AvgTimeToEmpty"])
         )
+        let chargeLimitPercent = chargeLimitPercent(from: registry)
 
         if integer(powerSource?["Time to Full"]) == 65_535 || integer(registry["AvgTimeToFull"]) == 65_535 {
             diagnostics.append("time_to_full_sentinel")
@@ -67,6 +68,7 @@ public struct IOKitBatteryReader: BatteryReader, Sendable {
             atCriticalLevel: boolean(powerSource?["At Critical Level"]) ?? boolean(registry["AtCriticalLevel"]) ?? false,
             timeToEmptyMinutes: timeToEmpty,
             timeToFullMinutes: timeToFull,
+            chargeLimitPercent: chargeLimitPercent,
             adapter: nil,
             sourceQuality: powerSource == nil && registry.isEmpty ? .unavailable : .measured,
             powerSourceState: sourceState,
@@ -158,6 +160,16 @@ public struct IOKitBatteryReader: BatteryReader, Sendable {
         case "AC Power": return .adapter
         default: return .unknown
         }
+    }
+
+    private func chargeLimitPercent(from registry: [String: Any]) -> Int? {
+        guard let batteryData = registry["BatteryData"] as? [String: Any],
+              let dailyMaximum = validPercent(integer(batteryData["DailyMaxSoc"])),
+              dailyMaximum > 0,
+              dailyMaximum < 100 else {
+            return nil
+        }
+        return dailyMaximum
     }
 
     private func validPercent(_ value: Int?) -> Int? {

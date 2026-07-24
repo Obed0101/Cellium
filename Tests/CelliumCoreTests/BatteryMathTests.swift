@@ -15,6 +15,25 @@ final class BatteryMathTests: XCTestCase {
         XCTAssertNil(BatteryMath.healthPercent(nominalChargeCapacityMAh: 6_249, designCapacityMAh: 0))
     }
 
+    func testHealthStabilizerRequiresRepeatedLowerReadings() {
+        var stabilizer = BatteryHealthStabilizer(
+            initialPercent: 97.8,
+            confirmationSamples: 3,
+            significantChangePercent: 0.5
+        )
+
+        XCTAssertEqual(stabilizer.update(95.6) ?? 0, 97.8, accuracy: 0.001)
+        XCTAssertEqual(stabilizer.update(95.6) ?? 0, 97.8, accuracy: 0.001)
+        XCTAssertEqual(stabilizer.update(95.6) ?? 0, 95.6, accuracy: 0.001)
+    }
+
+    func testHealthStabilizerDoesNotIncreaseFromTransientCapacityReading() {
+        var stabilizer = BatteryHealthStabilizer(initialPercent: 95.6)
+
+        XCTAssertEqual(stabilizer.update(97.8) ?? 0, 95.6, accuracy: 0.001)
+        XCTAssertEqual(stabilizer.update(97.8) ?? 0, 95.6, accuracy: 0.001)
+    }
+
     func testTemperatureConvertsCentiCelsius() {
         guard let temperature = BatteryMath.temperatureCelsius(fromCentiCelsius: 3_070) else {
             return XCTFail("Expected a valid temperature")

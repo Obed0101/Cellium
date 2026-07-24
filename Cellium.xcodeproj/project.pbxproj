@@ -14,6 +14,10 @@
 		A10000000000000000000086 /* CelliumDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000018 /* CelliumDashboardView.swift */; };
 		A10000000000000000000087 /* CelliumWeather.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000019 /* CelliumWeather.swift */; };
 		A10000000000000000000088 /* GitHubUpdateChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000020 /* GitHubUpdateChecker.swift */; };
+		A10000000000000000000089 /* WiFiNetworkMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000021 /* WiFiNetworkMonitor.swift */; };
+		A10000000000000000000090 /* BatteryAgentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000022 /* BatteryAgentView.swift */; };
+		A10000000000000000000091 /* BatteryPages.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000023 /* BatteryPages.swift */; };
+		A10000000000000000000092 /* CycleBudgetCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000024 /* CycleBudgetCoordinator.swift */; };
 		A10000000000000000000084 /* Cellium symbol in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000015 /* Cellium_symbol_white.svg */; };
 		A10000000000000000000085 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000016 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
@@ -26,6 +30,10 @@
 		A10000000000000000000018 /* CelliumDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CelliumDashboardView.swift; sourceTree = "<group>"; };
 		A10000000000000000000019 /* CelliumWeather.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CelliumWeather.swift; sourceTree = "<group>"; };
 		A10000000000000000000020 /* GitHubUpdateChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitHubUpdateChecker.swift; sourceTree = "<group>"; };
+		A10000000000000000000021 /* WiFiNetworkMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WiFiNetworkMonitor.swift; sourceTree = "<group>"; };
+		A10000000000000000000022 /* BatteryAgentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BatteryAgentView.swift; sourceTree = "<group>"; };
+		A10000000000000000000023 /* BatteryPages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BatteryPages.swift; sourceTree = "<group>"; };
+		A10000000000000000000024 /* CycleBudgetCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CycleBudgetCoordinator.swift; sourceTree = "<group>"; };
 		A10000000000000000000014 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A10000000000000000000015 /* Cellium_symbol_white.svg */ = {isa = PBXFileReference; lastKnownFileType = image.svg; path = Cellium_symbol_white.svg; sourceTree = "<group>"; };
 		A10000000000000000000016 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -77,6 +85,8 @@
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000020 /* GitHubUpdateChecker.swift */,
+				A10000000000000000000021 /* WiFiNetworkMonitor.swift */,
+				A10000000000000000000024 /* CycleBudgetCoordinator.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -112,6 +122,8 @@
 				A10000000000000000000013 /* QuickPanelView.swift */,
 				A10000000000000000000018 /* CelliumDashboardView.swift */,
 				A10000000000000000000019 /* CelliumWeather.swift */,
+				A10000000000000000000022 /* BatteryAgentView.swift */,
+				A10000000000000000000023 /* BatteryPages.swift */,
 			);
 			path = QuickPanel;
 			sourceTree = "<group>";
@@ -137,6 +149,7 @@
 				A10000000000000000000072 /* CelliumDarwin */,
 				A10000000000000000000073 /* CelliumAutomation */,
 				A10000000000000000000074 /* CelliumStore */,
+				A10000000000000000000075 /* CelliumIntelligence */,
 			);
 			productName = Cellium;
 			productReference = A10000000000000000000017 /* Cellium.app */;
@@ -195,6 +208,10 @@
 				A10000000000000000000086 /* CelliumDashboardView.swift in Sources */,
 				A10000000000000000000087 /* CelliumWeather.swift in Sources */,
 				A10000000000000000000088 /* GitHubUpdateChecker.swift in Sources */,
+				A10000000000000000000089 /* WiFiNetworkMonitor.swift in Sources */,
+				A10000000000000000000090 /* BatteryAgentView.swift in Sources */,
+				A10000000000000000000091 /* BatteryPages.swift in Sources */,
+				A10000000000000000000092 /* CycleBudgetCoordinator.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -313,6 +330,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A10000000000000000000070 /* XCRemoteSwiftPackageReference */;
 			productName = CelliumStore;
+		};
+		A10000000000000000000075 /* CelliumIntelligence */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A10000000000000000000070 /* XCRemoteSwiftPackageReference */;
+			productName = CelliumIntelligence;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
