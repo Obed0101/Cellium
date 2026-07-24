@@ -177,8 +177,10 @@ public actor BatteryIntelligenceService {
             ProviderMessage(role: "system", content: systemPrompt(languageCode: languageCode)),
             ProviderMessage(role: "user", content: summaryPrompt(for: evidence, localInsight: local, languageCode: languageCode))
         ]
-        let rawResponse = try await completeWithTimeout(configuration: configuration, messages: messages)
-        let actionDecision = parseActionDecision(rawResponse, evidence: evidence)
+        let response = AssistantResponseFormatter.format(
+            try await completeWithTimeout(configuration: configuration, messages: messages)
+        )
+        let actionDecision = parseActionDecision(response, evidence: evidence)
         var recommendations = local.recommendations
         if actionDecision.required, let actionMessage = actionDecision.message {
             recommendations.append(actionMessage)
@@ -239,7 +241,9 @@ public actor BatteryIntelligenceService {
             ProviderMessage(role: $0.role == .user ? "user" : "assistant", content: $0.content)
         })
         messages.append(ProviderMessage(role: "user", content: trimmedMessage))
-        let response = try await completeWithTimeout(configuration: configuration, messages: messages)
+        let response = AssistantResponseFormatter.format(
+            try await completeWithTimeout(configuration: configuration, messages: messages)
+        )
         return IntelligenceChatResult(
             languageCode: responseLanguageCode,
             prompt: transcript(for: messages),
@@ -343,7 +347,7 @@ public actor BatteryIntelligenceService {
         return """
         You are Cellium's battery evidence assistant. Answer in \(language). Use only the measured context supplied by Cellium, which may include the Mac model and macOS version, current outdoor weather, current battery/system readings, and up to seven days of local learning. Distinguish measured facts, estimates, and explanations. Health percentage and cycle count are different signals: do not infer battery damage, wear, or a required replacement unless the evidence supports that exact claim. Treat weather as environmental context, not proof of battery causation. If evidence is missing, say so. Never request secrets or passwords.
 
-        Format every response for a chat bubble: use real Markdown paragraphs separated by blank lines, put each bullet on its own line, and never concatenate separate sentences or sections. Keep the response concise and practical.
+        Format every response for a chat bubble with real Markdown. Use blank lines between paragraphs, put each bullet on its own line, and always include a space after sentence-ending punctuation before the next word. Never join separate sentences or sections, for example never write `stable.Right`; write `stable.` followed by a new paragraph. Keep the response concise and practical.
         """
     }
 

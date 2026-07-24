@@ -5,12 +5,17 @@ import CelliumIntelligence
 
 struct CelliumMarkdownText: View {
     let markdown: String
+    let formatsAssistantResponse: Bool
+
+    init(markdown: String, formatsAssistantResponse: Bool = true) {
+        self.markdown = markdown
+        self.formatsAssistantResponse = formatsAssistantResponse
+    }
 
     private var normalizedMarkdown: String {
-        markdown
-            .replacingOccurrences(of: "\\r\\n", with: "\n")
-            .replacingOccurrences(of: "\\n", with: "\n")
-            .replacingOccurrences(of: "\r\n", with: "\n")
+        formatsAssistantResponse
+            ? AssistantResponseFormatter.format(markdown)
+            : AssistantResponseFormatter.normalizeLineBreaks(markdown)
     }
 
     private var markdownWithHardBreaks: String {
@@ -592,7 +597,7 @@ struct BatteryAgentView: View {
                  Spacer(minLength: 18)
              } else {
                  Spacer(minLength: 18)
-                 CelliumMarkdownText(markdown: item.content)
+                 CelliumMarkdownText(markdown: item.content, formatsAssistantResponse: false)
                      .font(.system(size: 11, weight: .regular, design: .rounded))
                      .foregroundStyle(CelliumBrand.foreground)
                      .fixedSize(horizontal: false, vertical: true)

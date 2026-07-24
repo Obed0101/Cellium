@@ -29,6 +29,21 @@ final class BatteryInsightTests: XCTestCase {
         XCTAssertTrue(insight.recommendations.contains { $0.contains("separate signals") })
     }
 
+    func testAssistantResponseFormatterSeparatesJoinedSentences() {
+        let formatted = AssistantResponseFormatter.format(
+            "Battery looks stable.Right now the Mac is discharging. Check the recent history."
+        )
+
+        XCTAssertTrue(formatted.contains("stable.\n\nRight now"))
+        XCTAssertTrue(formatted.contains("discharging.\n\nCheck"))
+    }
+
+    func testAssistantResponseFormatterDecodesEscapedLineBreaks() {
+        let formatted = AssistantResponseFormatter.format("First paragraph.\\nSecond paragraph.")
+
+        XCTAssertEqual(formatted, "First paragraph.\nSecond paragraph.")
+    }
+
     func testLocalInsightMarksCriticalCharge() {
         let snapshot = BatteryEvidenceSnapshot(
             chargePercent: 8,

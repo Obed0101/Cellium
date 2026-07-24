@@ -526,6 +526,53 @@ public struct AgentChatMessage: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+public enum AssistantResponseFormatter {
+    public static func format(_ response: String) -> String {
+        let normalized = normalizeLineBreaks(response)
+        let hadExplicitLineBreak = normalized.contains("\n")
+        let repairedMissingSpaces = replacing(
+            #"([.!?])(?=[A-ZÁÉÍÓÚÑÜ])"#,
+            in: normalized,
+            with: "$1\n\n"
+        )
+
+        guard !hadExplicitLineBreak else {
+            return repairedMissingSpaces
+        }
+
+        return replacing(
+            #"([.!?])[ \\t]+(?=[A-ZÁÉÍÓÚÑÜ])"#,
+            in: repairedMissingSpaces,
+            with: "$1\n\n"
+        )
+    }
+
+    public static func normalizeLineBreaks(_ response: String) -> String {
+        response
+            .replacingOccurrences(of: "\\r\\n", with: "\n")
+            .replacingOccurrences(of: "\\n", with: "\n")
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+    }
+
+    private static func replacing(
+        _ pattern: String,
+        in text: String,
+        with replacement: String
+    ) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return text
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.stringByReplacingMatches(
+            in: text,
+            options: [],
+            range: range,
+            withTemplate: replacement
+        )
+    }
+}
+
 public enum IntelligenceError: Error, LocalizedError, Sendable, Equatable {
     case missingAPIKey
     case invalidEndpoint
