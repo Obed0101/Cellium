@@ -179,9 +179,12 @@ enum CelliumText {
      case updateCurrentDetail
      case updateAvailable
      case updateAvailableDetail
-     case updateCheckFailed
-     case updateFailedDetail
-     case openRelease
+      case updateCheckFailed
+      case updateFailedDetail
+      case openRelease
+      case installUpdate
+      case updating
+      case updatingDetail
      case humidity
      case windSpeed
      case language
@@ -400,9 +403,12 @@ struct CelliumCopy {
          case .updateCurrentDetail: return "Estás usando la versión %@."
          case .updateAvailable: return "Nueva versión · %@"
          case .updateAvailableDetail: return "Hay una versión nueva disponible en GitHub."
-         case .updateCheckFailed: return "No se pudo comprobar"
-         case .updateFailedDetail: return "Revisa la conexión e inténtalo de nuevo."
-         case .openRelease: return "Ver release"
+          case .updateCheckFailed: return "No se pudo comprobar"
+          case .updateFailedDetail: return "Revisa la conexión e inténtalo de nuevo."
+          case .openRelease: return "Ver release"
+          case .installUpdate: return "Actualizar ahora"
+          case .updating: return "Actualizando…"
+          case .updatingDetail: return "Descargando y preparando la actualización desde GitHub."
          case .language: return "Idioma"
 
         case .spanish: return "Español"
@@ -612,9 +618,12 @@ struct CelliumCopy {
          case .updateCurrentDetail: return "You are running version %@."
          case .updateAvailable: return "New version · %@"
          case .updateAvailableDetail: return "A newer version is available on GitHub."
-         case .updateCheckFailed: return "Check failed"
-         case .updateFailedDetail: return "Check your connection and try again."
-         case .openRelease: return "View release"
+          case .updateCheckFailed: return "Check failed"
+          case .updateFailedDetail: return "Check your connection and try again."
+          case .openRelease: return "View release"
+          case .installUpdate: return "Update now"
+          case .updating: return "Updating…"
+          case .updatingDetail: return "Downloading and preparing the update from GitHub."
          case .humidity: return "Humidity"
          case .windSpeed: return "Wind"
          case .language: return "Language"
@@ -996,13 +1005,17 @@ struct CelliumDashboardView: View {
                 showingAlertsPage = false
                 model.setShowingAgent(false)
                 model.setShowingSettings(false)
-                model.refreshHistory()
+                if !model.isRefreshingHistory {
+                    model.refreshHistoryRangeSupportingData()
+                }
             case .alerts:
                 showingHistoryPage = false
                 showingAlertsPage = true
                 model.setShowingAgent(false)
                 model.setShowingSettings(false)
-                model.refreshHistory()
+                if !model.isRefreshingHistory {
+                    model.refreshAlerts()
+                }
             case .agent:
                 showingHistoryPage = false
                 showingAlertsPage = false
@@ -1775,12 +1788,16 @@ struct CelliumDashboardView: View {
                 showingHistoryPage = true
                 showingAlertsPage = false
                 model.setShowingAgent(false)
-                model.refreshHistory()
+                if !model.isRefreshingHistory {
+                    model.refreshHistoryRangeSupportingData()
+                }
             case .alerts:
                 showingHistoryPage = false
                 showingAlertsPage = true
                 model.setShowingAgent(false)
-                model.refreshHistory()
+                if !model.isRefreshingHistory {
+                    model.refreshAlerts()
+                }
             case .agent:
                 showingHistoryPage = false
                 showingAlertsPage = false
@@ -1909,17 +1926,23 @@ struct CelliumDashboardView: View {
                     title: model.updateStatusTitle,
                     detail: model.updateStatusDetail
                 ) {
-                    Button {
-                        if model.updateReleaseURL == nil {
-                            model.checkForUpdates()
-                        } else {
-                            model.openUpdatePage()
-                        }
+                     Button {
+                         if model.updateReleaseURL == nil {
+                             model.checkForUpdates()
+                         } else if model.canInstallUpdate {
+                             model.installUpdate()
+                         } else {
+                             model.openUpdatePage()
+                         }
                     } label: {
-                        Label(
-                            model.updateReleaseURL == nil ? model.copy(.checkForUpdates) : model.copy(.openRelease),
-                            systemImage: model.updateReleaseURL == nil ? "arrow.clockwise" : "arrow.up.right"
-                        )
+                         Label(
+                             model.updateReleaseURL == nil
+                                 ? model.copy(.checkForUpdates)
+                                 : (model.canInstallUpdate ? model.copy(.installUpdate) : model.copy(.openRelease)),
+                             systemImage: model.updateReleaseURL == nil
+                                 ? "arrow.clockwise"
+                                 : (model.canInstallUpdate ? "arrow.down.circle" : "arrow.up.right")
+                         )
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)

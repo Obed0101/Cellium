@@ -168,7 +168,7 @@ enum HistoryRange: String, CaseIterable, Identifiable {
          case .twoHours: return 120
          case .sixHours: return 360
          case .twelveHours: return 720
-         case .day: return 1_440
+         case .day: return 720
          case .threeDays: return 720
          case .week: return 720
          case .twoWeeks: return 720
@@ -319,9 +319,11 @@ enum HistoryRange: String, CaseIterable, Identifiable {
     private let cycleBudgetCoordinator = CycleBudgetCoordinator()
     private let processMonitor = ProcessEnergyMonitor()
     private let updateChecker = GitHubUpdateChecker()
+    private let updateInstaller = GitHubUpdateInstaller()
     private let intelligenceService = BatteryIntelligenceService()
     private let wifiMonitor = WiFiNetworkMonitor()
     private var updateTask: Task<Void, Never>?
+    private var availableUpdateAsset: GitHubReleaseAsset? = nil
     private var intelligenceTask: Task<Void, Never>?
     private var activeIntelligenceRunID: UUID?
     private var lastAutomaticIntelligenceAnalysis: Date?
@@ -709,8 +711,17 @@ enum HistoryRange: String, CaseIterable, Identifiable {
     }
 
     var isCheckingForUpdates: Bool {
-        if case .checking = updateState { return true }
-        return false
+        switch updateState {
+        case .checking, .updating:
+            return true
+        default:
+            return false
+        }
+    }
+
+    var canInstallUpdate: Bool {
+        guard case .available = updateState else { return false }
+        return availableUpdateAsset != nil
     }
 
     var updateStatusTitle: String {
@@ -723,6 +734,8 @@ enum HistoryRange: String, CaseIterable, Identifiable {
             return String(format: copy(.updateCurrent), version)
         case let .available(version, _, _):
             return String(format: copy(.updateAvailable), version)
+        case .updating:
+            return copy(.updating)
         case .failed:
             return copy(.updateCheckFailed)
         }
@@ -738,6 +751,8 @@ enum HistoryRange: String, CaseIterable, Identifiable {
             return String(format: copy(.updateCurrentDetail), version)
         case let .available(_, name, _):
             return name.isEmpty ? copy(.updateAvailableDetail) : name
+        case .updating:
+            return copy(.updatingDetail)
         case .failed:
             return copy(.updateFailedDetail)
         }
@@ -1265,6 +1280,34 @@ enum HistoryRange: String, CaseIterable, Identifiable {
     }
 
     func refreshHistory(includeSupportingData: Bool = true) {
+        startHistoryLoad(
+            includeSupportingData: includeSupportingData,
+            includeRangeSupportingData: includeSupportingData,
+            includeAlerts: includeSupportingData
+        )
+    }
+
+    func refreshHistoryRangeSupportingData() {
+        startHistoryLoad(
+            includeSupportingData: false,
+            includeRangeSupportingData: true,
+            includeAlerts: false
+        )
+    }
+
+    func refreshAlerts() {
+        startHistoryLoad(
+            includeSupportingData: false,
+            includeRangeSupportingData: false,
+            includeAlerts: true
+        )
+    }
+
+    private func startHistoryLoad(
+        includeSupportingData: Bool,
+        includeRangeSupportingData: Bool,
+        includeAlerts: Bool
+    ) {
         historyLoadTask?.cancel()
         let requestID = UUID()
         historyRequestID = requestID
@@ -1276,7 +1319,9 @@ enum HistoryRange: String, CaseIterable, Identifiable {
             await self.loadHistory(
                 for: requestedRange,
                 requestID: requestID,
-                includeSupportingData: includeSupportingData
+                includeSupportingData: includeSupportingData,
+                includeRangeSupportingData: includeRangeSupportingData,
+                includeAlerts: includeAlerts
             )
             guard self.historyRequestID == requestID else { return }
             self.historyLoadTask = nil
@@ -1287,14 +1332,18 @@ enum HistoryRange: String, CaseIterable, Identifiable {
         await loadHistory(
             for: historyRange,
             requestID: nil,
-            includeSupportingData: true
+            includeSupportingData: true,
+            includeRangeSupportingData: true,
+            includeAlerts: true
         )
     }
 
     private func loadHistory(
         for requestedRange: HistoryRange,
         requestID: UUID?,
-        includeSupportingData: Bool
+        includeSupportingData: Bool,
+        includeRangeSupportingData: Bool,
+        includeAlerts: Bool
     ) async {
         isRefreshingHistory = true
         defer {
@@ -1319,8 +1368,6 @@ enum HistoryRange: String, CaseIterable, Identifiable {
                 recentSamples = []
                 recentSessions = []
                 processHistorySamples = []
-                alertEvents = []
-                intelligenceAnalysisLogs = []
                 hourlyAggregates = []
                  learningAggregates = []
                  learningHourlyAggregates = []
@@ -1334,6 +1381,13 @@ enum HistoryRange: String, CaseIterable, Identifiable {
                 learningDaysObserved = 0
                 learningFirstDate = nil
                 learningLastDate = nil
+            } else if includeRangeSupportingData {
+                hourlyAggregates = []
+                processHistorySamples = []
+            }
+            if includeAlerts {
+                alertEvents = []
+                intelligenceAnalysisLogs = []
             }
             historyAggregates = []
             storeError = "Local storage is unavailable."
@@ -1345,6 +1399,9 @@ enum HistoryRange: String, CaseIterable, Identifiable {
                 try? await coordinator.flush()
                 _ = try? await store.applyRetentionIfNeeded()
                 try await refreshCycleBudget(from: store, now: Date())
+                guard isCurrentRequest() else { return }
+            } else if includeRangeSupportingData {
+                try? await coordinator.flush()
                 guard isCurrentRequest() else { return }
             }
 
@@ -1363,105 +1420,112 @@ enum HistoryRange: String, CaseIterable, Identifiable {
             }
             storeError = nil
 
-            guard includeSupportingData else { return }
+            if includeRangeSupportingData {
+                let computerUseWindow = makeComputerUseWindow(
+                    for: requestedRange,
+                    endingOn: computerUseDate
+                )
+                let computerUseSamples = try await store.fetchAggregates(
+                    resolution: computerUseWindow.resolution,
+                    since: computerUseWindow.start,
+                    until: computerUseWindow.end,
+                    limit: computerUseWindow.limit
+                )
+                guard isCurrentRequest() else { return }
+                let nextHourlyAggregates = Array(computerUseSamples.reversed())
+                if hourlyAggregates != nextHourlyAggregates {
+                    hourlyAggregates = nextHourlyAggregates
+                }
 
-             let sessionSince = Date().addingTimeInterval(-24 * 60 * 60)
-             let computerUseWindow = makeComputerUseWindow(
-                 for: requestedRange,
-                 endingOn: computerUseDate
-             )
-             let computerUseSamples = try await store.fetchAggregates(
-                 resolution: computerUseWindow.resolution,
-                 since: computerUseWindow.start,
-                 until: computerUseWindow.end,
-                 limit: computerUseWindow.limit
-             )
-             guard isCurrentRequest() else { return }
+                let nextProcessHistorySamples = try await store.fetchProcessSamples(
+                    since: requestedRange.since ?? Date().addingTimeInterval(-7 * 86_400),
+                    limit: min(2_000, max(240, requestedRange.aggregateFetchLimit * 4))
+                )
+                guard isCurrentRequest() else { return }
+                if processHistorySamples != nextProcessHistorySamples {
+                    processHistorySamples = nextProcessHistorySamples
+                }
+            }
 
-             let learnedSamples = try await store.fetchAggregates(
-                 resolution: .day,
-                 since: Date().addingTimeInterval(-7 * 86_400),
-                 limit: 7
-             )
-             guard isCurrentRequest() else { return }
-             let learningHourlySamples = try await store.fetchAggregates(
-                 resolution: .minute,
-                 since: Date().addingTimeInterval(-7 * 86_400),
-                 limit: 10_000
-             )
-             guard isCurrentRequest() else { return }
-             let evidence = try await store.sampleEvidence()
+            if includeSupportingData {
+                let sessionSince = Date().addingTimeInterval(-24 * 60 * 60)
+                let learnedSamples = try await store.fetchAggregates(
+                    resolution: .day,
+                    since: Date().addingTimeInterval(-7 * 86_400),
+                    limit: 7
+                )
+                guard isCurrentRequest() else { return }
+                let learningHourlySamples = try await store.fetchAggregates(
+                    resolution: .minute,
+                    since: Date().addingTimeInterval(-7 * 86_400),
+                    limit: 10_000
+                )
+                guard isCurrentRequest() else { return }
+                let evidence = try await store.sampleEvidence()
+                guard isCurrentRequest() else { return }
+                storedSampleCount = evidence.sampleCount
+                learningDaysObserved = evidence.observedDays
+                learningFirstDate = evidence.firstSampleDate
+                learningLastDate = evidence.lastSampleDate
 
-            guard isCurrentRequest() else { return }
-            storedSampleCount = evidence.sampleCount
-            learningDaysObserved = evidence.observedDays
-            learningFirstDate = evidence.firstSampleDate
-            learningLastDate = evidence.lastSampleDate
-             let nextLearningAggregates = Array(learnedSamples.reversed())
-             let nextLearningHourlyAggregates = Array(learningHourlySamples.reversed())
-              let nextHourlyAggregates = Array(computerUseSamples.reversed())
+                let nextLearningAggregates = Array(learnedSamples.reversed())
+                let nextLearningHourlyAggregates = Array(learningHourlySamples.reversed())
+                if learningAggregates != nextLearningAggregates {
+                    learningAggregates = nextLearningAggregates
+                }
+                if learningHourlyAggregates != nextLearningHourlyAggregates {
+                    learningHourlyAggregates = nextLearningHourlyAggregates
+                }
 
+                let nextRecentSamples = try await store.fetchBatterySamples(
+                    since: Date().addingTimeInterval(-30 * 60),
+                    limit: 60
+                )
+                guard isCurrentRequest() else { return }
+                let nextRecentSessions = try await store.fetchSessions(since: sessionSince, limit: 5)
+                guard isCurrentRequest() else { return }
+                if recentSamples != nextRecentSamples {
+                    recentSamples = nextRecentSamples
+                }
+                if recentSessions != nextRecentSessions {
+                    recentSessions = nextRecentSessions
+                }
+            }
 
-            let nextRecentSamples = try await store.fetchBatterySamples(
-                since: Date().addingTimeInterval(-30 * 60),
-                limit: 60
-            )
-            guard isCurrentRequest() else { return }
-            let nextRecentSessions = try await store.fetchSessions(since: sessionSince, limit: 5)
-            guard isCurrentRequest() else { return }
-            let nextProcessHistorySamples = try await store.fetchProcessSamples(
-                since: requestedRange.since ?? Date().addingTimeInterval(-7 * 86_400),
-                limit: requestedRange.duration == nil ? 10_000 : max(240, requestedRange.aggregateFetchLimit * 4)
-            )
-            guard isCurrentRequest() else { return }
-            let nextAlertEvents = try await store.fetchAlertEvents(
-                since: Date().addingTimeInterval(-30 * 86_400),
-                limit: 100
-            )
-            guard isCurrentRequest() else { return }
-            let fetchedIntelligenceAnalysisLogs = try await store.fetchIntelligenceAnalyses(
-                since: Date().addingTimeInterval(-365 * 86_400),
-                limit: 200
-            )
-            guard isCurrentRequest() else { return }
-            let nextIntelligenceAnalysisLogs = recoverInterruptedIntelligenceAnalyses(
-                fetchedIntelligenceAnalysisLogs
-            )
-            if lastAutomaticIntelligenceAnalysis == nil,
-               let latestAnalysis = nextIntelligenceAnalysisLogs.first(where: { $0.kind == .analysis }) {
-                lastAutomaticIntelligenceAnalysis = latestAnalysis.requestedAt
-                defaults.set(latestAnalysis.requestedAt, forKey: "cellium.intelligence.lastAnalysis")
+            if includeAlerts {
+                let nextAlertEvents = try await store.fetchAlertEvents(
+                    since: Date().addingTimeInterval(-30 * 86_400),
+                    limit: 100
+                )
+                guard isCurrentRequest() else { return }
+                let fetchedIntelligenceAnalysisLogs = try await store.fetchIntelligenceAnalyses(
+                    since: Date().addingTimeInterval(-365 * 86_400),
+                    limit: 200
+                )
+                guard isCurrentRequest() else { return }
+                let nextIntelligenceAnalysisLogs = recoverInterruptedIntelligenceAnalyses(
+                    fetchedIntelligenceAnalysisLogs
+                )
+                if lastAutomaticIntelligenceAnalysis == nil,
+                   let latestAnalysis = nextIntelligenceAnalysisLogs.first(where: { $0.kind == .analysis }) {
+                    lastAutomaticIntelligenceAnalysis = latestAnalysis.requestedAt
+                    defaults.set(latestAnalysis.requestedAt, forKey: "cellium.intelligence.lastAnalysis")
+                }
+                if alertEvents != nextAlertEvents {
+                    alertEvents = nextAlertEvents
+                }
+                if intelligenceAnalysisLogs != nextIntelligenceAnalysisLogs {
+                    intelligenceAnalysisLogs = nextIntelligenceAnalysisLogs
+                }
+                restoreLatestIntelligenceInsight(from: nextIntelligenceAnalysisLogs)
             }
-            let nextDiagnostics = try await store.diagnostics()
-            guard isCurrentRequest() else { return }
-             if learningAggregates != nextLearningAggregates {
-                 learningAggregates = nextLearningAggregates
-             }
-             if learningHourlyAggregates != nextLearningHourlyAggregates {
-                 learningHourlyAggregates = nextLearningHourlyAggregates
-             }
-             if hourlyAggregates != nextHourlyAggregates {
 
-                hourlyAggregates = nextHourlyAggregates
-            }
-            if recentSamples != nextRecentSamples {
-                recentSamples = nextRecentSamples
-            }
-            if recentSessions != nextRecentSessions {
-                recentSessions = nextRecentSessions
-            }
-            if processHistorySamples != nextProcessHistorySamples {
-                processHistorySamples = nextProcessHistorySamples
-            }
-            if alertEvents != nextAlertEvents {
-                alertEvents = nextAlertEvents
-            }
-            if intelligenceAnalysisLogs != nextIntelligenceAnalysisLogs {
-                intelligenceAnalysisLogs = nextIntelligenceAnalysisLogs
-            }
-            restoreLatestIntelligenceInsight(from: nextIntelligenceAnalysisLogs)
-            if storeDiagnostics != nextDiagnostics {
-                storeDiagnostics = nextDiagnostics
+            if includeSupportingData {
+                let nextDiagnostics = try await store.diagnostics()
+                guard isCurrentRequest() else { return }
+                if storeDiagnostics != nextDiagnostics {
+                    storeDiagnostics = nextDiagnostics
+                }
             }
         } catch is CancellationError {
             return
@@ -1471,8 +1535,6 @@ enum HistoryRange: String, CaseIterable, Identifiable {
                 recentSamples = []
                 recentSessions = []
                 processHistorySamples = []
-                alertEvents = []
-                intelligenceAnalysisLogs = []
                 hourlyAggregates = []
                  learningAggregates = []
                  learningHourlyAggregates = []
@@ -1486,6 +1548,13 @@ enum HistoryRange: String, CaseIterable, Identifiable {
                 learningDaysObserved = 0
                 learningFirstDate = nil
                 learningLastDate = nil
+            } else if includeRangeSupportingData {
+                hourlyAggregates = []
+                processHistorySamples = []
+            }
+            if includeAlerts {
+                alertEvents = []
+                intelligenceAnalysisLogs = []
             }
             historyAggregates = []
             if let storeError = error as? StoreError {
@@ -1561,9 +1630,9 @@ enum HistoryRange: String, CaseIterable, Identifiable {
           hourlyAggregates = []
           defaults.set(range.rawValue, forKey: "cellium.historyRange")
 
-         if panelVisible {
-             refreshHistory(includeSupportingData: true)
-         }
+          if panelVisible {
+              refreshHistoryRangeSupportingData()
+          }
      }
 
       var isComputerUseToday: Bool {
@@ -1586,10 +1655,10 @@ enum HistoryRange: String, CaseIterable, Identifiable {
          guard normalizedDate <= today, normalizedDate != computerUseDate else { return }
 
          computerUseDate = normalizedDate
-         hourlyAggregates = []
-         if panelVisible {
-             refreshHistory(includeSupportingData: true)
-         }
+          hourlyAggregates = []
+          if panelVisible {
+              refreshHistoryRangeSupportingData()
+          }
      }
 
      func moveComputerUseDate(by days: Int) {
@@ -2483,6 +2552,7 @@ enum HistoryRange: String, CaseIterable, Identifiable {
         } else {
             updateTask?.cancel()
             updateTask = nil
+            availableUpdateAsset = nil
             updateState = .idle
         }
     }
@@ -2500,6 +2570,7 @@ enum HistoryRange: String, CaseIterable, Identifiable {
         }
 
         updateTask?.cancel()
+        availableUpdateAsset = nil
         updateState = .checking
         updateTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -2511,8 +2582,15 @@ enum HistoryRange: String, CaseIterable, Identifiable {
                 defaults.set(checkedAt, forKey: "cellium.lastUpdateCheck")
                 switch result {
                 case let .current(version):
+                    availableUpdateAsset = nil
                     updateState = .current(version: version)
                 case let .available(release):
+                    availableUpdateAsset = release.assets.first { asset in
+                        let fileName = URL(fileURLWithPath: asset.name).lastPathComponent
+                        return fileName == asset.name
+                            && fileName.lowercased().hasSuffix(".zip")
+                            && asset.digest != nil
+                    }
                     updateState = .available(
                         version: release.tagName,
                         name: release.name,
@@ -2525,6 +2603,41 @@ enum HistoryRange: String, CaseIterable, Identifiable {
                 guard !Task.isCancelled else { return }
                 lastUpdateCheck = Date()
                 defaults.set(lastUpdateCheck, forKey: "cellium.lastUpdateCheck")
+                availableUpdateAsset = nil
+                updateState = .failed
+            }
+        }
+    }
+
+    func installUpdate() {
+        guard case let .available(version, _, _) = updateState,
+              let asset = availableUpdateAsset else {
+            openUpdatePage()
+            return
+        }
+
+        updateTask?.cancel()
+        updateState = .updating(version: version)
+        let targetAppURL = Bundle.main.bundleURL
+        let bundleIdentifier = Bundle.main.bundleIdentifier ?? "com.obed0101.cellium"
+        updateTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let sourceAppURL = try await updateInstaller.prepare(
+                    asset: asset,
+                    expectedBundleIdentifier: bundleIdentifier
+                )
+                try updateInstaller.launchReplacement(
+                    sourceAppURL: sourceAppURL,
+                    targetAppURL: targetAppURL
+                )
+                updateTask = nil
+                NSApplication.shared.terminate(nil)
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled else { return }
+                updateTask = nil
                 updateState = .failed
             }
         }

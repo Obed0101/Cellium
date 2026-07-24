@@ -35,6 +35,15 @@ jobs:
           CODE_SIGN_IDENTITY: "-"
         run: ./Scripts/build-dmg.sh
 
+      - name: Build updater ZIP
+        run: |
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' App/Info.plist)
+          APP_PATH=".build/CelliumInstallerDerivedData/Build/Products/Release/Cellium.app"
+          test -d "$APP_PATH"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$APP_PATH" \
+            "Distribution/Cellium-${VERSION}.zip"
+
       - name: Ensure GitHub release exists
         env:
           GH_TOKEN: ${{ github.token }}
@@ -49,4 +58,4 @@ jobs:
       - name: Upload installer to release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$RELEASE_TAG" Distribution/*.dmg --repo "$GITHUB_REPOSITORY" --clobber
+        run: gh release upload "$RELEASE_TAG" Distribution/*.dmg Distribution/*.zip --repo "$GITHUB_REPOSITORY" --clobber

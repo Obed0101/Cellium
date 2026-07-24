@@ -16,7 +16,7 @@
 
 Cellium is a native macOS menu bar app for understanding what is happening to your Mac's battery and power system. It collects the signals macOS exposes, keeps history in local SQLite storage, explains patterns without pretending that estimates are measurements, and gives you an optional AI assistant grounded in the same evidence.
 
-The current public release is **Cellium 0.1.10**.
+The current public release is **Cellium 0.1.11**.
 
 ## What Cellium answers
 
@@ -169,7 +169,7 @@ Intel compatibility, exact per-process wattage, charge automation and Apple-nota
 
 ## Install the latest release
 
-Download the current DMG from [GitHub Releases](https://github.com/Obed0101/Cellium/releases/latest). The current artifact is `Cellium-0.1.10.dmg`.
+Download the current DMG from [GitHub Releases](https://github.com/Obed0101/Cellium/releases/latest). The current artifact is `Cellium-0.1.11.dmg`; the matching ZIP is used by the in-app updater.
 
 The disk image contains `Cellium.app` and an `Applications` shortcut for drag-to-install. The free release is ad-hoc signed, not Apple-notarized, and macOS may require **System Settings → Privacy & Security → Open Anyway** on first launch. See [Documentation/DISTRIBUTION.md](Documentation/DISTRIBUTION.md) for Developer ID signing and notarization.
 
@@ -193,7 +193,7 @@ To create a local drag-to-Applications installer:
 
 ```bash
 ./Scripts/build-dmg.sh
-open Distribution/Cellium-0.1.10.dmg
+open Distribution/Cellium-0.1.11.dmg
 ```
 
 The distribution script validates the app bundle and DMG. It refuses to overwrite an existing disk image and supports Developer ID signing when configured. See [Documentation/DISTRIBUTION.md](Documentation/DISTRIBUTION.md).
