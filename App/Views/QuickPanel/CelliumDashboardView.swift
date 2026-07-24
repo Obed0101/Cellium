@@ -205,6 +205,7 @@ enum CelliumText {
       case learningToggleDetail
       case alerts
       case clearAlerts
+      case clearIntelligenceLog
       case temperatureThreshold
     case criticalChargeThreshold
     case data
@@ -349,7 +350,7 @@ struct CelliumCopy {
         case .connectedNotCharging: return "Conectado, sin cargar"
         case .chargingToLimit: return "Cargando hasta el límite del %d%%"
         case .chargeLimitActive: return "Límite de carga activo · %d%%"
-        case .powerNotMeasured: return "Sin consumo medido"
+        case .powerNotMeasured: return "Sin consumo"
         case .powerMode: return "Modo de energía"
         case .automaticPower: return "Automático"
         case .lowPower: return "Bajo consumo"
@@ -423,7 +424,8 @@ struct CelliumCopy {
         case .learningToggle: return "Aprendizaje local"
         case .learningToggleDetail: return "Usa tus propias muestras para entender tu rutina."
         case .alerts: return "Alertas"
-        case .clearAlerts: return "Limpiar alertas"
+         case .clearAlerts: return "Limpiar alertas"
+         case .clearIntelligenceLog: return "Limpiar registro"
         case .temperatureThreshold: return "Avisar por temperatura"
         case .criticalChargeThreshold: return "Avisar por nivel crítico"
         case .data: return "Datos"
@@ -560,7 +562,7 @@ struct CelliumCopy {
         case .connectedNotCharging: return "Connected, not charging"
         case .chargingToLimit: return "Charging to %d%% limit"
         case .chargeLimitActive: return "Charge limit active · %d%%"
-        case .powerNotMeasured: return "No battery draw measured"
+        case .powerNotMeasured: return "No draw"
         case .powerMode: return "Power mode"
         case .automaticPower: return "Automatic"
         case .lowPower: return "Low Power"
@@ -636,7 +638,8 @@ struct CelliumCopy {
         case .learningToggle: return "Local learning"
         case .learningToggleDetail: return "Uses your own samples to understand your routine."
         case .alerts: return "Alerts"
-        case .clearAlerts: return "Clear alerts"
+         case .clearAlerts: return "Clear alerts"
+         case .clearIntelligenceLog: return "Clear log"
         case .temperatureThreshold: return "Temperature warning"
         case .criticalChargeThreshold: return "Low battery warning"
         case .data: return "Data"
@@ -1010,12 +1013,21 @@ struct CelliumDashboardView: View {
     }
 
     private var intelligenceCard: some View {
-        let latestAnalysis = model.latestIntelligenceAnalysis
-        let insight = model.intelligenceInsight ?? model.localIntelligenceInsight
+        let batteryUsePausedByPower = model.isBatteryUseCurrentlyPausedByExternalPower
+        let deterministicCycleAlert = !batteryUsePausedByPower && (model.cycleUsageSummary?.status == .elevated
+            || model.cycleUsageSummary?.status == .high
+        )
+        let latestAnalysis = deterministicCycleAlert ? nil : model.latestIntelligenceAnalysis
+        let insight = deterministicCycleAlert
+            ? (model.localIntelligenceInsight ?? model.intelligenceInsight)
+            : (model.intelligenceInsight ?? model.localIntelligenceInsight)
         let severity = latestAnalysis?.severity.flatMap(BatteryInsightSeverity.init(rawValue:)) ?? insight?.severity
         let symbol: String
         let symbolColor: Color
-        if model.isGeneratingIntelligence {
+        if batteryUsePausedByPower {
+            symbol = "bolt.fill"
+            symbolColor = CelliumBrand.signal
+        } else if model.isGeneratingIntelligence {
             symbol = "arrow.triangle.2.circlepath"
             symbolColor = CelliumBrand.accentStrong
         } else if let severity {
@@ -1025,7 +1037,9 @@ struct CelliumDashboardView: View {
             symbol = "sparkles"
             symbolColor = CelliumBrand.signal
         }
-        let status = intelligenceStatusText(analysis: latestAnalysis, insight: insight)
+        let status = batteryUsePausedByPower
+            ? (model.language == .spanish ? "Conectado: sin descarga activa" : "Connected: no active discharge")
+            : intelligenceStatusText(analysis: latestAnalysis, insight: insight)
 
         return Button {
             openAgentFromDashboard()
@@ -1043,7 +1057,10 @@ struct CelliumDashboardView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)
             .frame(minHeight: 48)
-            .background(CelliumBrand.elevated, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .background(
+                batteryUsePausedByPower ? CelliumBrand.surface : CelliumBrand.elevated,
+                in: RoundedRectangle(cornerRadius: 15, style: .continuous)
+            )
             .overlay {
                 RoundedRectangle(cornerRadius: 15, style: .continuous)
                     .stroke(CelliumBrand.border, lineWidth: 1)
@@ -1279,7 +1296,8 @@ struct CelliumDashboardView: View {
     private var insight: some View {
         if model.statusKind == .attention
             || model.statusKind == .elevated
-            || model.statusKind == .connectedNotCharging {
+            || model.statusKind == .connectedNotCharging,
+           !model.cycleUsageIsPrimaryStatus {
             let isCritical = model.statusKind == .attention
             let isElevated = model.statusKind == .elevated
             HStack(alignment: .top, spacing: 10) {
@@ -1308,7 +1326,8 @@ struct CelliumDashboardView: View {
     @ViewBuilder
     private var cycleUsage: some View {
         if let summary = model.cycleUsageSummary, model.cyclePlanConfiguration.enabled {
-            let color = cycleStatusColor(summary.status)
+            let batteryUsePausedByPower = model.isBatteryUseCurrentlyPausedByExternalPower
+            let color = batteryUsePausedByPower ? CelliumBrand.signal : cycleStatusColor(summary.status)
             let maximum = max(120, ceil(summary.todayUsagePercent / 100) * 100)
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
@@ -1318,7 +1337,11 @@ struct CelliumDashboardView: View {
                     )
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                     Spacer()
-                    Text(cycleStatusLabel(summary.status))
+                     Text(
+                         batteryUsePausedByPower
+                             ? (model.language == .spanish ? "EN CARGA" : "CHARGING")
+                             : cycleStatusLabel(summary.status)
+                     )
                         .font(.system(size: 9, weight: .bold, design: .rounded))
                         .foregroundStyle(color)
                         .padding(.horizontal, 8)
@@ -1332,12 +1355,19 @@ struct CelliumDashboardView: View {
                             .font(.system(size: 28, weight: .semibold, design: .rounded))
                             .monospacedDigit()
                             .foregroundStyle(color)
-                        Text(String(
-                            format: model.language == .spanish ? "%.2f EFC hoy" : "%.2f EFC today",
-                            summary.todayEquivalentCycles
-                        ))
-                            .font(.system(size: 9, weight: .medium, design: .monospaced))
-                            .foregroundStyle(CelliumBrand.muted)
+                         Text(String(
+                             format: model.language == .spanish ? "%.2f EFC hoy" : "%.2f EFC today",
+                             summary.todayEquivalentCycles
+                         ))
+                             .font(.system(size: 9, weight: .medium, design: .monospaced))
+                             .foregroundStyle(CelliumBrand.muted)
+                         if batteryUsePausedByPower {
+                             Text(model.language == .spanish
+                                 ? "Ahora: sin descarga activa"
+                                 : "Now: no active discharge")
+                                 .font(.system(size: 9, weight: .semibold, design: .rounded))
+                                 .foregroundStyle(CelliumBrand.signal)
+                         }
                     }
                     Spacer()
                     VStack(alignment: .trailing, spacing: 2) {
@@ -1658,7 +1688,11 @@ struct CelliumDashboardView: View {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: model.learnedBatterySymbol)
                     .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(model.statusKind == .attention ? CelliumBrand.warning : CelliumBrand.signal)
+                    .foregroundStyle(
+                         model.statusKind == .attention
+                             ? CelliumBrand.critical
+                             : (model.statusKind == .elevated ? CelliumBrand.warning : CelliumBrand.signal)
+                     )
                     .frame(width: 20)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(model.learnedBatteryTitle)

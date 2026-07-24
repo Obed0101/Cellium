@@ -7,51 +7,77 @@ import CelliumStore
 
 struct BatteryHistoryPage: View {
      @ObservedObject var model: BatteryViewModel
+     @Environment(\.accessibilityReduceMotion) private var reduceMotion
      @State private var hoveredHistoryIndex: Int?
      @State private var hoveredHistoryX: CGFloat = 0
      @State private var hoveredLearningDate: Date?
      @State private var hoveredLearningX: CGFloat = 0
+      @State private var hoveredCycleIndex: Int?
+      @State private var hoveredCycleX: CGFloat = 0
+      @State private var cachedProcessSummaries: [ProcessHistorySummary] = []
 
-     private struct CycleHistoryPoint: Identifiable {
+     private struct CycleHistoryPoint: Identifiable, Equatable {
          let date: Date
          let usagePercent: Double
+         let equivalentCycles: Double
          let hardwareCycleDelta: Int
          let quality: SensorQuality
+         let observedSeconds: TimeInterval
+         let sampleCount: Int
 
          var id: Date { date }
      }
 
 
-    private var processSummaries: [ProcessHistorySummary] {
-        let grouped = Dictionary(grouping: model.processHistorySamples) { sample in
+      private func makeProcessSummaries(from samples: [StoredProcessSample]) -> [ProcessHistorySummary] {
+         let grouped = Dictionary(grouping: samples) { sample in
             "\(sample.kind.rawValue):\(sample.name)"
         }
         return grouped.values.compactMap { samples in
             guard let first = samples.first else { return nil }
             let cpu = samples.map(\.cpuPercent).reduce(0, +) / Double(samples.count)
-            let memorySamples = samples.compactMap(\.memoryPercent)
-            let memory = memorySamples.isEmpty ? nil : memorySamples.reduce(0, +) / Double(memorySamples.count)
-            let energySamples = samples.compactMap(\.estimatedBatteryPercentPerMinute)
-            let energy = energySamples.isEmpty ? nil : energySamples.reduce(0, +) / Double(energySamples.count)
-            return ProcessHistorySummary(
+             let memorySamples = samples.compactMap(\.memoryPercent)
+             let memory = memorySamples.isEmpty ? nil : memorySamples.reduce(0, +) / Double(memorySamples.count)
+             let energySamples = samples.compactMap(\.estimatedBatteryPercentPerMinute)
+             let energy = energySamples.isEmpty ? nil : energySamples.reduce(0, +) / Double(energySamples.count)
+             let observedMinutes = observedMinutes(for: samples)
+             return ProcessHistorySummary(
                 id: "\(first.kind.rawValue):\(first.name)",
                 name: first.name,
                 kind: first.kind,
-                averageCPUPercent: cpu,
-                memoryPercent: memory,
-                estimatedBatteryPercentPerMinute: energy,
-                sampleCount: samples.count
+                 averageCPUPercent: cpu,
+                 memoryPercent: memory,
+                 estimatedBatteryPercentPerMinute: energy,
+                 estimatedDrainPercent: energy.map { $0 * observedMinutes },
+                 observedMinutes: observedMinutes,
+                 sampleCount: samples.count
             )
         }
-        .sorted { left, right in
-            let leftEnergy = left.estimatedBatteryPercentPerMinute ?? 0
-            let rightEnergy = right.estimatedBatteryPercentPerMinute ?? 0
-            if leftEnergy != rightEnergy { return leftEnergy > rightEnergy }
-            return left.averageCPUPercent > right.averageCPUPercent
-        }
-    }
+         .sorted { left, right in
+             let leftDrain = left.estimatedDrainPercent ?? 0
+             let rightDrain = right.estimatedDrainPercent ?? 0
+             if leftDrain != rightDrain { return leftDrain > rightDrain }
+             return left.averageCPUPercent > right.averageCPUPercent
+          }
+      }
 
-    var body: some View {
+      private func refreshProcessSummaries() {
+          cachedProcessSummaries = makeProcessSummaries(from: model.processHistorySamples)
+      }
+
+      private func observedMinutes(for samples: [StoredProcessSample]) -> Double {
+          // fetchProcessSamples returns newest-first rows. Dictionary(grouping:)
+          // preserves that order, so sorting every process again only adds work
+          // while the history page is being recomputed.
+          let dates = samples.map(\.timestamp)
+          guard dates.count > 1 else { return 1 }
+          let observedSeconds = zip(dates, dates.dropFirst()).reduce(0.0) { total, pair in
+              total + min(300, max(0, pair.0.timeIntervalSince(pair.1)))
+          }
+         return max(1, observedSeconds / 60)
+     }
+
+     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
                 hourlySection
@@ -61,12 +87,14 @@ struct BatteryHistoryPage: View {
                 processSection
             }
             .padding(18)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .foregroundStyle(CelliumBrand.foreground)
-        .animation(.easeOut(duration: 0.2), value: model.historyAggregates)
-        .animation(.easeOut(duration: 0.2), value: model.processHistorySamples)
-    }
+         }
+         .frame(maxWidth: .infinity, maxHeight: .infinity)
+         .foregroundStyle(CelliumBrand.foreground)
+         .onAppear { refreshProcessSummaries() }
+         .onChange(of: model.processHistorySamples) { _, _ in
+             refreshProcessSummaries()
+         }
+     }
 
     private var hourlySection: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -208,29 +236,33 @@ struct BatteryHistoryPage: View {
 
     private var cycleUsageSection: some View {
         VStack(alignment: .leading, spacing: 9) {
-            sectionTitle(
-                model.language == .spanish ? "Uso equivalente y ciclos" : "Equivalent use and cycles",
+             sectionTitle(
+                 model.language == .spanish ? "Uso equivalente y ciclos" : "Equivalent use and cycles",
                 subtitle: model.language == .spanish
                     ? "EFC estimados; el contador de hardware permanece medido por macOS"
-                    : "Estimated EFC; the hardware counter remains measured by macOS"
-            )
+                     : "Estimated EFC; the hardware counter remains measured by macOS"
+             )
 
-            if cycleHistoryPoints.isEmpty {
+             if let summary = model.cycleUsageSummary {
+                 cycleOverview(summary)
+             }
+
+             if cycleHistoryPoints.isEmpty {
                 emptyState(text: model.language == .spanish
                     ? "Aún no hay historial de ciclos equivalente."
                     : "Equivalent cycle history is not available yet.")
             } else {
-                Chart {
+                 Chart {
                     RuleMark(y: .value("100%", 100))
                         .foregroundStyle(CelliumBrand.foreground.opacity(0.45))
                         .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
                         .annotation(position: .top, alignment: .trailing) {
-                            Text("100% · 1 EFC")
+                            Text(model.language == .spanish ? "100% = 1 EFC" : "100% = 1 EFC")
                                 .font(.system(size: 8, weight: .medium, design: .monospaced))
                                 .foregroundStyle(CelliumBrand.muted)
                         }
 
-                    ForEach(cycleHistoryPoints) { point in
+                     ForEach(cycleHistoryPoints) { point in
                         if usesIntradayCycleHistory {
                             BarMark(
                                 x: .value(model.copy(.chartTime), point.date),
@@ -244,11 +276,23 @@ struct BatteryHistoryPage: View {
                                 y: .value("EFC", point.usagePercent)
                             )
                             .foregroundStyle(cyclePointColor(point))
-                            .cornerRadius(3)
-                        }
-                    }
-                }
-                .chartYScale(domain: 0...cycleHistoryMaximum)
+                             .cornerRadius(3)
+                         }
+                     }
+
+                     if let hoveredCyclePoint {
+                         RuleMark(x: .value(model.copy(.chartTime), hoveredCyclePoint.date))
+                             .foregroundStyle(CelliumBrand.foreground.opacity(0.55))
+                             .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                         PointMark(
+                             x: .value(model.copy(.chartTime), hoveredCyclePoint.date),
+                             y: .value("EFC", hoveredCyclePoint.usagePercent)
+                         )
+                         .foregroundStyle(cyclePointColor(hoveredCyclePoint))
+                         .symbolSize(65)
+                     }
+                 }
+                 .chartYScale(domain: 0...cycleHistoryMaximum)
                 .chartXAxis { AxisMarks(values: .automatic(desiredCount: 5)) }
                 .chartYAxis {
                     AxisMarks(position: .leading) { value in
@@ -257,10 +301,35 @@ struct BatteryHistoryPage: View {
                             if let percent = value.as(Double.self) {
                                 Text("\(Int(percent))%")
                             }
-                        }
-                    }
-                }
-                .frame(height: 155)
+                         }
+                     }
+                 }
+                 .chartOverlay { proxy in
+                     GeometryReader { geometry in
+                         Rectangle()
+                             .fill(.clear)
+                             .contentShape(Rectangle())
+                             .onContinuousHover(coordinateSpace: .local) { phase in
+                                 switch phase {
+                                 case .active(let location):
+                                     guard let date: Date = proxy.value(atX: location.x) else { return }
+                                     hoveredCycleIndex = closestCycleIndex(to: date)
+                                     hoveredCycleX = location.x
+                                 case .ended:
+                                     hoveredCycleIndex = nil
+                                 }
+                             }
+
+                         if let hoveredCyclePoint {
+                             HistoryHoverTooltip(text: cycleTooltip(for: hoveredCyclePoint))
+                                 .position(
+                                     x: min(max(110, hoveredCycleX), max(110, geometry.size.width - 110)),
+                                     y: 18
+                                 )
+                         }
+                     }
+                 }
+                  .frame(height: 155)
                 .padding(8)
                 .background(CelliumBrand.surface, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
                 .accessibilityLabel(model.language == .spanish
@@ -327,8 +396,11 @@ struct BatteryHistoryPage: View {
                                 CycleHistoryPoint(
                                     date: bucket.bucketStart,
                                     usagePercent: bucket.usagePercent,
+                                    equivalentCycles: bucket.equivalentCycles,
                                     hardwareCycleDelta: bucket.hardwareCycleDelta,
-                                    quality: bucket.quality
+                                    quality: bucket.quality,
+                                    observedSeconds: bucket.observedSeconds,
+                                    sampleCount: bucket.sampleCount
                                 )
                             ))
                     }
@@ -365,8 +437,11 @@ struct BatteryHistoryPage: View {
                 CycleHistoryPoint(
                     date: $0.bucketStart,
                     usagePercent: $0.usagePercent,
+                    equivalentCycles: $0.equivalentCycles,
                     hardwareCycleDelta: $0.hardwareCycleDelta,
-                    quality: $0.quality
+                    quality: $0.quality,
+                    observedSeconds: $0.observedSeconds,
+                    sampleCount: $0.sampleCount
                 )
             }
         }
@@ -375,30 +450,63 @@ struct BatteryHistoryPage: View {
         let buckets = model.cycleUsageQuarterHourBuckets
             .filter { $0.bucketStart >= since }
             .sorted { $0.bucketStart < $1.bucketStart }
-        var currentDay: Date?
-        var cumulative = 0.0
-        var cycleDelta = 0
-        return buckets.map { bucket in
-            let day = Calendar.autoupdatingCurrent.startOfDay(for: bucket.bucketStart)
-            if currentDay != day {
-                currentDay = day
-                cumulative = 0
-                cycleDelta = 0
-            }
-            cumulative += bucket.equivalentCycles
-            cycleDelta += bucket.hardwareCycleDelta
+        let grouped = Dictionary(grouping: buckets) { bucket in
+            Calendar.autoupdatingCurrent.dateInterval(of: .hour, for: bucket.bucketStart)?.start
+                ?? bucket.bucketStart
+        }
+        return grouped.values.compactMap { intervalBuckets in
+            guard let first = intervalBuckets.min(by: { $0.bucketStart < $1.bucketStart }) else { return nil }
+            let equivalentCycles = intervalBuckets.reduce(0) { $0 + $1.equivalentCycles }
             return CycleHistoryPoint(
-                date: bucket.bucketStart,
-                usagePercent: cumulative * 100,
-                hardwareCycleDelta: cycleDelta,
-                quality: bucket.quality
+                date: first.bucketStart,
+                usagePercent: equivalentCycles * 100,
+                equivalentCycles: equivalentCycles,
+                hardwareCycleDelta: intervalBuckets.reduce(0) { $0 + $1.hardwareCycleDelta },
+                quality: intervalBuckets.map(\.quality).max(by: { $0.rawValue < $1.rawValue }) ?? .unavailable,
+                observedSeconds: intervalBuckets.reduce(0) { $0 + $1.observedSeconds },
+                sampleCount: intervalBuckets.reduce(0) { $0 + $1.sampleCount }
             )
         }
+        .sorted { $0.date < $1.date }
     }
 
     private var cycleHistoryMaximum: Double {
         let maximum = cycleHistoryPoints.map(\.usagePercent).max() ?? 100
-        return max(120, ceil(maximum / 100) * 100)
+        return max(20, ceil(maximum / 20) * 20)
+    }
+
+    private var hoveredCyclePoint: CycleHistoryPoint? {
+        guard let hoveredCycleIndex,
+              cycleHistoryPoints.indices.contains(hoveredCycleIndex) else {
+            return nil
+        }
+        return cycleHistoryPoints[hoveredCycleIndex]
+    }
+
+    private func closestCycleIndex(to date: Date) -> Int? {
+        guard !cycleHistoryPoints.isEmpty else { return nil }
+        return cycleHistoryPoints.indices.min {
+            abs(cycleHistoryPoints[$0].date.timeIntervalSince(date))
+                < abs(cycleHistoryPoints[$1].date.timeIntervalSince(date))
+        }
+    }
+
+    private func cycleTooltip(for point: CycleHistoryPoint) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: model.language == .spanish ? "es_ES" : "en_US")
+        formatter.dateFormat = usesIntradayCycleHistory ? "d MMM HH:mm" : "d MMM yyyy"
+        let interval = usesIntradayCycleHistory
+            ? (model.language == .spanish ? "intervalo" : "interval")
+            : (model.language == .spanish ? "día" : "day")
+        let usage = String(format: "%.2f EFC (%.0f%%)", point.equivalentCycles, point.usagePercent)
+        let cycles = model.language == .spanish
+            ? "+\(point.hardwareCycleDelta) ciclos medidos"
+            : "+\(point.hardwareCycleDelta) measured cycles"
+        let quality = cycleQualityLabel(point.quality)
+        let observed = model.language == .spanish
+            ? "observado \(durationLabel(point.observedSeconds))"
+            : "observed \(durationLabel(point.observedSeconds))"
+        return "\(formatter.string(from: point.date)) · \(interval) · \(usage) · \(cycles) · \(observed) · \(quality)"
     }
 
     private func cyclePointColor(_ point: CycleHistoryPoint) -> Color {
@@ -455,6 +563,44 @@ struct BatteryHistoryPage: View {
               ? "Actividad por hora en los últimos \(rangeLabel)"
               : "Hourly activity across the last \(rangeLabel)"
 
+     }
+
+     private func cycleOverview(_ summary: CycleUsageSummary) -> some View {
+         HStack(spacing: 14) {
+             CycleUsageRing(
+                 equivalentCycles: summary.todayEquivalentCycles,
+                 language: model.language,
+                 reduceMotion: reduceMotion
+             )
+             VStack(alignment: .leading, spacing: 5) {
+                 Text(model.language == .spanish ? "Hoy" : "Today")
+                     .font(.system(size: 11, weight: .bold, design: .rounded))
+                 Text(model.language == .spanish
+                     ? "Uso acumulado, no nivel de carga"
+                     : "Accumulated use, not charge level")
+                     .font(.system(size: 9, weight: .regular, design: .rounded))
+                     .foregroundStyle(CelliumBrand.muted)
+                 HStack(spacing: 6) {
+                     Text(String(format: "%.2f EFC", summary.todayEquivalentCycles))
+                         .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                         .foregroundStyle(CelliumBrand.signal)
+                     Text("·")
+                         .foregroundStyle(CelliumBrand.muted)
+                     Text(String(format: "+%d %@", summary.todayHardwareCycleDelta, model.language == .spanish ? "ciclos medidos" : "measured cycles"))
+                         .font(.system(size: 9, weight: .medium, design: .rounded))
+                         .foregroundStyle(CelliumBrand.muted)
+                 }
+                 Text(model.language == .spanish
+                     ? "La línea inferior muestra cuánto uso ocurrió en cada intervalo. Pasa el cursor para ver el detalle."
+                     : "The chart below shows use in each interval. Hover for details.")
+                     .font(.system(size: 9, weight: .regular, design: .rounded))
+                     .foregroundStyle(CelliumBrand.muted)
+                     .fixedSize(horizontal: false, vertical: true)
+             }
+             Spacer(minLength: 0)
+         }
+         .padding(10)
+         .background(CelliumBrand.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
      }
 
      private var dayNightSection: some View {
@@ -712,87 +858,18 @@ struct BatteryHistoryPage: View {
         }
     }
 
-    private var processSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionTitle(
-                model.language == .spanish ? "Apps y procesos con más impacto" : "Apps and processes with most impact",
-                subtitle: model.language == .spanish
-                    ? "CPU, RAM y consumo estimado en el rango seleccionado"
-                    : "CPU, RAM and estimated drain in the selected range"
-            )
-            if processSummaries.isEmpty {
-                emptyState(text: model.copy(.noAppImpact))
-            } else {
-                if !model.processHistorySamples.isEmpty {
-                    ProcessHistoryChart(
-                        samples: model.processHistorySamples,
-                        language: model.language,
-                        range: model.historyRange
-                    )
-                    .frame(height: 155)
-                }
-                ForEach(processSummaries.prefix(8)) { summary in
-                    processSummaryRow(summary)
-                }
-            }
-        }
-    }
-
-    private func processSummaryRow(_ summary: ProcessHistorySummary) -> some View {
-        HStack(spacing: 9) {
-            if let icon = model.processImpacts.first(where: { $0.name == summary.name && $0.kind == summary.kind })?.icon {
-                Image(nsImage: icon)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 18, height: 18)
-                    .frame(width: 22)
-            } else {
-                Image(systemName: summary.kind.symbol)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(summary.kind.color)
-                    .frame(width: 22)
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 5) {
-                    Text(summary.name)
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Text(summary.kind.label(for: model.language))
-                        .font(.system(size: 8, weight: .medium, design: .monospaced))
-                        .foregroundStyle(CelliumBrand.muted)
-                }
-                HStack(spacing: 6) {
-                    Text(String(format: "CPU %.1f%%", summary.averageCPUPercent))
-                    if let memory = summary.memoryPercent {
-                        Text(String(format: "RAM %.1f%%", memory))
-                    }
-                    Text(sampleCountLabel(summary.sampleCount))
-                }
-                .font(.system(size: 8, weight: .regular, design: .monospaced))
-                .foregroundStyle(CelliumBrand.muted)
-            }
-            Spacer(minLength: 4)
-            if let rate = summary.estimatedBatteryPercentPerMinute {
-                Text(rate < 0.01 ? "~<0.01%/min" : String(format: "~%.2f%%/min", rate))
-                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(rate >= 0.05 ? CelliumBrand.warning : CelliumBrand.signal)
-            } else {
-                Text(model.copy(.estimated))
-                    .font(.system(size: 8, weight: .regular, design: .monospaced))
-                    .foregroundStyle(CelliumBrand.muted)
-            }
-        }
-        .padding(10)
-        .background(CelliumBrand.surface, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-    }
-
-    private func sampleCountLabel(_ count: Int) -> String {
-        if model.language == .spanish {
-            return count == 1 ? "1 muestra" : "\(count) muestras"
-        }
-        return count == 1 ? "1 sample" : "\(count) samples"
-    }
+      private var processSection: some View {
+          let summaries = Array(cachedProcessSummaries.prefix(8))
+          let totalDrain = summaries.compactMap(\.estimatedDrainPercent).reduce(0, +)
+          return ProcessHistorySection(
+              summaries: summaries,
+              totalDrain: totalDrain,
+              processImpacts: model.processImpacts,
+              language: model.language,
+              noImpactText: model.copy(.noAppImpact),
+              reduceMotion: reduceMotion
+          )
+      }
 
      private struct LearningHourSummary {
          let hour: Int
@@ -965,6 +1042,49 @@ private struct HistoryHoverTooltip: View {
                     .stroke(CelliumBrand.border, lineWidth: 1)
             }
             .allowsHitTesting(false)
+    }
+}
+
+private struct CycleUsageRing: View {
+    let equivalentCycles: Double
+    let language: CelliumLanguage
+    let reduceMotion: Bool
+
+    private var primaryProgress: Double {
+        min(1, max(0, equivalentCycles))
+    }
+
+    private var overflowProgress: Double {
+        min(1, max(0, equivalentCycles - 1))
+    }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(CelliumBrand.border.opacity(0.7), lineWidth: 7)
+            Circle()
+                .trim(from: 0, to: primaryProgress)
+                .stroke(CelliumBrand.signal, style: StrokeStyle(lineWidth: 7, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+            Circle()
+                .trim(from: 0, to: overflowProgress)
+                .stroke(CelliumBrand.warning, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+                .scaleEffect(1.16)
+            VStack(spacing: 0) {
+                Text(String(format: "%.2f", equivalentCycles))
+                    .font(.system(size: 17, weight: .bold, design: .monospaced))
+                    .monospacedDigit()
+                Text("EFC")
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .foregroundStyle(CelliumBrand.muted)
+            }
+        }
+        .frame(width: 72, height: 72)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.45), value: equivalentCycles)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(language == .spanish ? "Uso equivalente de batería hoy" : "Equivalent battery use today")
+        .accessibilityValue(String(format: "%.2f EFC, %.0f%%", equivalentCycles, equivalentCycles * 100))
     }
 }
 
@@ -1244,7 +1364,161 @@ private struct ProcessHistorySummary: Identifiable {
     let averageCPUPercent: Double
     let memoryPercent: Double?
     let estimatedBatteryPercentPerMinute: Double?
+    let estimatedDrainPercent: Double?
+    let observedMinutes: Double
     let sampleCount: Int
+}
+
+private struct ProcessHistorySection: View {
+    let summaries: [ProcessHistorySummary]
+    let totalDrain: Double
+    let processImpacts: [ProcessEnergyImpact]
+    let language: CelliumLanguage
+    let noImpactText: String
+    let reduceMotion: Bool
+    @State private var hoveredProcessID: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle(
+                language == .spanish ? "Apps y procesos con más impacto" : "Apps and processes with most impact",
+                subtitle: language == .spanish
+                    ? "Cuánto representan en el rango seleccionado, no solo su CPU"
+                    : "What they represent in the selected range, not just their CPU"
+            )
+            if summaries.isEmpty {
+                Text(noImpactText)
+                    .font(.system(size: 11, weight: .regular, design: .rounded))
+                    .foregroundStyle(CelliumBrand.muted)
+                    .frame(maxWidth: .infinity, minHeight: 100, alignment: .leading)
+            } else {
+                ProcessImpactChart(
+                    summaries: summaries,
+                    language: language,
+                    reduceMotion: reduceMotion
+                )
+                .frame(height: max(170, CGFloat(summaries.count) * 28))
+                ForEach(summaries) { summary in
+                    processSummaryRow(summary)
+                }
+                Text(language == .spanish
+                    ? "El consumo por app es una estimación basada en CPU/RAM y potencia observada. No es wattaje individual medido."
+                    : "Per-app drain is estimated from CPU/RAM and observed battery power. It is not individually measured wattage.")
+                    .font(.system(size: 9, weight: .regular, design: .rounded))
+                    .foregroundStyle(CelliumBrand.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func processSummaryRow(_ summary: ProcessHistorySummary) -> some View {
+        let isHovered = hoveredProcessID == summary.id
+        let share = totalDrain > 0 ? (summary.estimatedDrainPercent ?? 0) / totalDrain : 0
+        return HStack(spacing: 9) {
+            if let icon = processImpacts.first(where: { $0.name == summary.name && $0.kind == summary.kind })?.icon {
+                Image(nsImage: icon)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 18, height: 18)
+                    .frame(width: 22)
+            } else {
+                Image(systemName: summary.kind.symbol)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(summary.kind.color)
+                    .frame(width: 22)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 5) {
+                    Text(summary.name)
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(summary.kind.label(for: language))
+                        .font(.system(size: 8, weight: .medium, design: .monospaced))
+                        .foregroundStyle(CelliumBrand.muted)
+                }
+                HStack(spacing: 6) {
+                    Text(String(format: "CPU %.1f%%", summary.averageCPUPercent))
+                    if let memory = summary.memoryPercent {
+                        Text(String(format: "RAM %.1f%%", memory))
+                    }
+                    Text(observedDurationLabel(summary.observedMinutes))
+                }
+                .font(.system(size: 8, weight: .regular, design: .monospaced))
+                .foregroundStyle(CelliumBrand.muted)
+                GeometryReader { geometry in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(CelliumBrand.border.opacity(0.6))
+                        Capsule()
+                            .fill(summary.kind.color)
+                            .frame(width: geometry.size.width * min(1, max(0, share)))
+                    }
+                }
+                .frame(height: 4)
+            }
+            Spacer(minLength: 4)
+            VStack(alignment: .trailing, spacing: 3) {
+                if let drain = summary.estimatedDrainPercent {
+                    Text(formatEstimatedDrain(drain))
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundStyle(drain >= 5 ? CelliumBrand.warning : CelliumBrand.signal)
+                    if let rate = summary.estimatedBatteryPercentPerMinute {
+                        Text(formatEstimatedRate(rate))
+                            .font(.system(size: 8, weight: .medium, design: .monospaced))
+                            .foregroundStyle(CelliumBrand.muted)
+                    }
+                } else {
+                    Text(language == .spanish ? "Sin estimación" : "No estimate")
+                        .font(.system(size: 8, weight: .regular, design: .monospaced))
+                        .foregroundStyle(CelliumBrand.muted)
+                }
+            }
+            .frame(minWidth: 82, alignment: .trailing)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(language == .spanish ? "Consumo estimado" : "Estimated drain")
+            .accessibilityValue(summary.estimatedDrainPercent.map(formatEstimatedDrain) ?? (language == .spanish ? "sin datos" : "no data"))
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, isHovered ? 8 : 0)
+        .background(isHovered ? CelliumBrand.surface : .clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .contentShape(Rectangle())
+        .onHover { isInside in
+            hoveredProcessID = isInside ? summary.id : nil
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isHovered)
+    }
+
+    private func sectionTitle(_ title: String, subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+            Text(subtitle)
+                .font(.system(size: 9, weight: .regular, design: .rounded))
+                .foregroundStyle(CelliumBrand.muted)
+        }
+    }
+
+    private func observedDurationLabel(_ minutes: Double) -> String {
+        let roundedMinutes = Int(minutes.rounded())
+        if roundedMinutes >= 60 {
+            return language == .spanish
+                ? "observado \(roundedMinutes / 60)h"
+                : "observed \(roundedMinutes / 60)h"
+        }
+        return language == .spanish
+            ? "observado \(max(1, roundedMinutes))m"
+            : "observed \(max(1, roundedMinutes))m"
+    }
+
+    private func formatEstimatedDrain(_ value: Double) -> String {
+        if value < 0.01 { return language == .spanish ? "~<0.01% en rango" : "~<0.01% in range" }
+        return String(format: language == .spanish ? "~%.1f%% en rango" : "~%.1f%% in range", value)
+    }
+
+    private func formatEstimatedRate(_ value: Double) -> String {
+        if value < 0.01 { return "~<0.01%/min" }
+        return String(format: "~%.2f%%/min", value)
+    }
 }
 
 private struct ProcessHistoryChart: View {
@@ -1398,6 +1672,119 @@ private struct ProcessHistoryChart: View {
     }
 }
 
+private struct ProcessImpactChart: View {
+    let summaries: [ProcessHistorySummary]
+    let language: CelliumLanguage
+    let reduceMotion: Bool
+    @State private var hoveredID: String?
+    @State private var hoveredY: CGFloat = 0
+
+    private var maximumDrain: Double {
+        let maximum = summaries.compactMap(\.estimatedDrainPercent).max() ?? 0
+        return max(1, ceil(maximum / 5) * 5)
+    }
+
+    private var hoveredSummary: ProcessHistorySummary? {
+        guard let hoveredID else { return nil }
+        return summaries.first { $0.id == hoveredID }
+    }
+
+    var body: some View {
+        Chart {
+            ForEach(summaries) { summary in
+                impactMark(for: summary)
+            }
+        }
+        .chartXScale(domain: 0...maximumDrain)
+        .chartXAxis {
+            AxisMarks(position: .bottom) { value in
+                AxisGridLine().foregroundStyle(CelliumBrand.border.opacity(0.55))
+                AxisValueLabel {
+                    if let value = value.as(Double.self) {
+                        Text(value < 0.01 ? "<.01%" : String(format: "%.0f%%", value))
+                    }
+                }
+            }
+        }
+        .chartYAxis {
+            AxisMarks(position: .leading) { value in
+                AxisValueLabel {
+                    if let name = value.as(String.self) {
+                        Text(name)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(width: 92, alignment: .leading)
+                    }
+                }
+            }
+        }
+        .chartOverlay { proxy in
+            GeometryReader { geometry in
+                Rectangle()
+                    .fill(.clear)
+                    .contentShape(Rectangle())
+                    .onContinuousHover(coordinateSpace: .local) { phase in
+                        switch phase {
+                        case .active(let location):
+                            guard let categoryValue: String = proxy.value(atY: location.y) else { return }
+                            hoveredID = summaries.first { category(for: $0) == categoryValue }?.id
+                            hoveredY = location.y
+                        case .ended:
+                            hoveredID = nil
+                        }
+                    }
+
+                if let hoveredSummary {
+                    HistoryHoverTooltip(text: tooltip(for: hoveredSummary))
+                        .position(
+                            x: max(130, geometry.size.width - 110),
+                            y: min(max(26, hoveredY), max(26, geometry.size.height - 26))
+                        )
+                }
+            }
+        }
+        .padding(8)
+        .background(CelliumBrand.surface, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .accessibilityLabel(language == .spanish ? "Consumo estimado por app y proceso" : "Estimated drain by app and process")
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: hoveredID)
+    }
+
+    @ChartContentBuilder
+    private func impactMark(for summary: ProcessHistorySummary) -> some ChartContent {
+        let drain = summary.estimatedDrainPercent ?? 0
+        BarMark(
+            x: .value(language == .spanish ? "Consumo estimado" : "Estimated drain", drain),
+            y: .value(language == .spanish ? "Proceso" : "Process", category(for: summary))
+        )
+        .foregroundStyle(summary.kind.color)
+        .opacity(hoveredID == nil || hoveredID == summary.id ? 1 : 0.32)
+        .cornerRadius(4)
+        .annotation(position: .trailing, alignment: .leading) {
+            Text(drain < 0.01 ? "<0.01%" : String(format: "%.1f%%", drain))
+                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                .foregroundStyle(CelliumBrand.muted)
+        }
+    }
+
+    private func category(for summary: ProcessHistorySummary) -> String {
+        "\(summary.name) · \(summary.kind.label(for: language))"
+    }
+
+    private func tooltip(for summary: ProcessHistorySummary) -> String {
+        let drain = summary.estimatedDrainPercent ?? 0
+        let rate = summary.estimatedBatteryPercentPerMinute ?? 0
+        let drainText = drain < 0.01 ? "<0.01%" : String(format: "%.1f%%", drain)
+        let rateText = rate < 0.01 ? "<0.01%/min" : String(format: "%.2f%%/min", rate)
+        let observed = language == .spanish
+            ? "observado \(Int(summary.observedMinutes.rounded()))m"
+            : "observed \(Int(summary.observedMinutes.rounded()))m"
+        if language == .spanish {
+            return "\(summary.name) · \(drainText) en rango · \(rateText) · CPU \(String(format: "%.1f", summary.averageCPUPercent))% · \(observed)"
+        }
+        return "\(summary.name) · \(drainText) in range · \(rateText) · CPU \(String(format: "%.1f", summary.averageCPUPercent))% · \(observed)"
+    }
+}
+
 private extension StoredProcessKind {
     var symbol: String {
         switch self {
@@ -1457,7 +1844,6 @@ struct BatteryAlertsPage: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .foregroundStyle(CelliumBrand.foreground)
-        .animation(.easeOut(duration: 0.2), value: model.alertEvents)
     }
 
     @ViewBuilder
@@ -1529,9 +1915,14 @@ struct BatteryAlertsPage: View {
                     Text(String(format: model.copy(.intelligenceLogDetail), model.intelligenceAnalysisCount))
                         .font(.system(size: 9, weight: .regular, design: .rounded))
                         .foregroundStyle(CelliumBrand.muted)
-                }
-                Spacer()
-                Text(String(format: model.copy(.intelligenceRuns), model.intelligenceAnalysisCount))
+                 }
+                 Spacer()
+                 Button(model.copy(.clearIntelligenceLog)) {
+                     model.clearIntelligenceAnalysisLog()
+                 }
+                 .buttonStyle(.bordered)
+                 .controlSize(.mini)
+                 Text(String(format: model.copy(.intelligenceRuns), model.intelligenceAnalysisCount))
                     .font(.system(size: 9, weight: .semibold, design: .monospaced))
                     .foregroundStyle(CelliumBrand.signal)
             }

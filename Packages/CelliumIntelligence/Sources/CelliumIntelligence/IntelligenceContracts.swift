@@ -246,20 +246,24 @@ public struct IntelligenceDeviceContext: Codable, Equatable, Sendable {
     public let modelIdentifier: String?
     public let operatingSystem: String
     public let architecture: String
+    public let appVersion: String?
 
     public init(
         modelIdentifier: String? = nil,
         operatingSystem: String,
-        architecture: String
+        architecture: String,
+        appVersion: String? = nil
     ) {
         self.modelIdentifier = modelIdentifier
         self.operatingSystem = operatingSystem
         self.architecture = architecture
+        self.appVersion = appVersion
     }
 }
 
 public struct IntelligenceWeatherContext: Codable, Equatable, Sendable {
     public let locationLabel: String?
+    public let timezoneIdentifier: String?
     public let condition: String
     public let temperatureCelsius: Double
     public let apparentTemperatureCelsius: Double
@@ -268,6 +272,7 @@ public struct IntelligenceWeatherContext: Codable, Equatable, Sendable {
 
     public init(
         locationLabel: String? = nil,
+        timezoneIdentifier: String? = nil,
         condition: String,
         temperatureCelsius: Double,
         apparentTemperatureCelsius: Double,
@@ -275,6 +280,7 @@ public struct IntelligenceWeatherContext: Codable, Equatable, Sendable {
         windSpeedKmh: Double
     ) {
         self.locationLabel = locationLabel
+        self.timezoneIdentifier = timezoneIdentifier
         self.condition = condition
         self.temperatureCelsius = temperatureCelsius
         self.apparentTemperatureCelsius = apparentTemperatureCelsius
@@ -351,19 +357,112 @@ public struct IntelligenceLearningContext: Codable, Equatable, Sendable {
     }
 }
 
+public struct IntelligenceTimeContext: Codable, Equatable, Sendable {
+    public let localDateTime: String
+    public let timeZoneIdentifier: String
+    public let utcOffsetMinutes: Int
+    public let localHour: Int
+    public let dayOfWeek: Int
+    public let isDaylightSavingTime: Bool
+    public let source: String
+
+    public init(
+        localDateTime: String,
+        timeZoneIdentifier: String,
+        utcOffsetMinutes: Int,
+        localHour: Int,
+        dayOfWeek: Int,
+        isDaylightSavingTime: Bool,
+        source: String
+    ) {
+        self.localDateTime = localDateTime
+        self.timeZoneIdentifier = timeZoneIdentifier
+        self.utcOffsetMinutes = utcOffsetMinutes
+        self.localHour = min(23, max(0, localHour))
+        self.dayOfWeek = min(7, max(1, dayOfWeek))
+        self.isDaylightSavingTime = isDaylightSavingTime
+        self.source = source
+    }
+}
+
+public struct IntelligenceUsageHour: Codable, Equatable, Sendable {
+    public let localHour: Int
+    public let observedDays: Int
+    public let activeDays: Int
+    public let averageActivityScore: Double?
+    public let averageCPUPercent: Double?
+    public let averageMemoryUsedPercent: Double?
+
+    public init(
+        localHour: Int,
+        observedDays: Int,
+        activeDays: Int,
+        averageActivityScore: Double? = nil,
+        averageCPUPercent: Double? = nil,
+        averageMemoryUsedPercent: Double? = nil
+    ) {
+        self.localHour = min(23, max(0, localHour))
+        self.observedDays = max(0, observedDays)
+        self.activeDays = max(0, activeDays)
+        self.averageActivityScore = averageActivityScore
+        self.averageCPUPercent = averageCPUPercent
+        self.averageMemoryUsedPercent = averageMemoryUsedPercent
+    }
+}
+
+public struct IntelligenceUsageContext: Codable, Equatable, Sendable {
+    public let windowDays: Int
+    public let observedDays: Int
+    public let sampleCount: Int
+    public let averageActiveHoursPerDay: Double?
+    public let typicalStartLocalHour: Int?
+    public let typicalEndLocalHour: Int?
+    public let peakLocalHour: Int?
+    public let hourlyProfile: [IntelligenceUsageHour]
+    public let basis: String
+
+    public init(
+        windowDays: Int = 7,
+        observedDays: Int,
+        sampleCount: Int,
+        averageActiveHoursPerDay: Double? = nil,
+        typicalStartLocalHour: Int? = nil,
+        typicalEndLocalHour: Int? = nil,
+        peakLocalHour: Int? = nil,
+        hourlyProfile: [IntelligenceUsageHour] = [],
+        basis: String = "estimated from CPU and memory activity"
+    ) {
+        self.windowDays = max(1, windowDays)
+        self.observedDays = max(0, observedDays)
+        self.sampleCount = max(0, sampleCount)
+        self.averageActiveHoursPerDay = averageActiveHoursPerDay
+        self.typicalStartLocalHour = typicalStartLocalHour
+        self.typicalEndLocalHour = typicalEndLocalHour
+        self.peakLocalHour = peakLocalHour
+        self.hourlyProfile = hourlyProfile
+        self.basis = basis
+    }
+}
+
 public struct IntelligenceContext: Codable, Equatable, Sendable {
     public let device: IntelligenceDeviceContext
     public let weather: IntelligenceWeatherContext?
     public let weeklyLearning: IntelligenceLearningContext
+    public let time: IntelligenceTimeContext?
+    public let usage: IntelligenceUsageContext?
 
     public init(
         device: IntelligenceDeviceContext,
         weather: IntelligenceWeatherContext? = nil,
-        weeklyLearning: IntelligenceLearningContext
+        weeklyLearning: IntelligenceLearningContext,
+        time: IntelligenceTimeContext? = nil,
+        usage: IntelligenceUsageContext? = nil
     ) {
         self.device = device
         self.weather = weather
         self.weeklyLearning = weeklyLearning
+        self.time = time
+        self.usage = usage
     }
 }
 
@@ -384,6 +483,9 @@ public struct BatteryEvidenceSnapshot: Codable, Equatable, Sendable {
     public let memoryUsedPercent: Double?
     public let diskUsedPercent: Double?
     public let learningDaysObserved: Int
+    public let chargeLimitPercent: Int?
+    public let isChargeLimitActive: Bool
+    public let batteryUsePausedByExternalPower: Bool
     public let recentHistory: [BatteryEvidencePoint]
     public let processImpacts: [ProcessEvidence]
     public let context: IntelligenceContext?
@@ -409,7 +511,10 @@ public struct BatteryEvidenceSnapshot: Codable, Equatable, Sendable {
         recentHistory: [BatteryEvidencePoint] = [],
         processImpacts: [ProcessEvidence] = [],
         context: IntelligenceContext? = nil,
-        cycleUsage: CycleUsageSummary? = nil
+        cycleUsage: CycleUsageSummary? = nil,
+        chargeLimitPercent: Int? = nil,
+        isChargeLimitActive: Bool = false,
+        batteryUsePausedByExternalPower: Bool = false
     ) {
         self.capturedAt = capturedAt
         self.chargePercent = chargePercent
@@ -427,6 +532,9 @@ public struct BatteryEvidenceSnapshot: Codable, Equatable, Sendable {
         self.memoryUsedPercent = memoryUsedPercent
         self.diskUsedPercent = diskUsedPercent
         self.learningDaysObserved = max(0, learningDaysObserved)
+        self.chargeLimitPercent = chargeLimitPercent
+        self.isChargeLimitActive = isChargeLimitActive
+        self.batteryUsePausedByExternalPower = batteryUsePausedByExternalPower
         self.recentHistory = recentHistory
         self.processImpacts = processImpacts
         self.context = context
@@ -795,8 +903,15 @@ public enum BatteryInsightEngine {
                 summary = spanish ? "Hay señales que merecen revisión, pero no prueban por sí solas un daño de batería." : "Some signals deserve review, but they do not prove battery damage by themselves."
             }
         case .info:
-            title = spanish ? "Batería estable" : "Battery looks stable"
-            summary = spanish ? "Las mediciones actuales no muestran una señal importante fuera de tu contexto observado." : "Current measurements do not show an important signal outside the observed context."
+            if snapshot.cycleUsage != nil {
+                title = spanish ? "Uso de batería en ritmo" : "Battery use on track"
+                summary = spanish
+                    ? "El uso equivalente está dentro del umbral absoluto actual. Esto describe ritmo de uso, no confirma por sí solo la salud física de la batería."
+                    : "Equivalent use is within the current absolute threshold. This describes usage pace and does not by itself confirm physical battery health."
+            } else {
+                title = spanish ? "Batería estable" : "Battery looks stable"
+                summary = spanish ? "Las mediciones actuales no muestran una señal importante fuera de tu contexto observado." : "Current measurements do not show an important signal outside the observed context."
+            }
         }
 
         return BatteryInsight(

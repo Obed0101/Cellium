@@ -641,6 +641,18 @@ public actor SQLiteStore {
         }
     }
 
+    public func clearIntelligenceAnalyses() throws {
+        let connection = try requireConnection()
+        let statement = try Self.prepare(
+            "DELETE FROM intelligence_analysis_logs;",
+            connection: connection
+        )
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw Self.sqliteError(connection)
+        }
+    }
+
     @discardableResult
     public func appendIntelligenceAnalysis(_ analysis: StoredIntelligenceAnalysis) throws -> Int64 {
         guard !analysis.prompt.isEmpty else {

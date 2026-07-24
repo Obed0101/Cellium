@@ -155,6 +155,25 @@ final class BatteryInsightTests: XCTestCase {
         XCTAssertTrue(insight.recommendations.contains { $0.contains("separate signals") })
     }
 
+    func testLocalInsightUsesOnTrackForLowAbsoluteUseAbovePersonalBaseline() {
+        let snapshot = evidence(
+            cycleUsage: cycleSummary(
+                status: .onTrack,
+                comparison: .higher,
+                todayEFC: 0.17,
+                rollingEFC: 0.17,
+                hardwareDelta: 0
+            )
+        )
+
+        let insight = BatteryInsightEngine.makeInsight(from: snapshot, languageCode: "en")
+
+        XCTAssertEqual(insight.severity, .info)
+        XCTAssertEqual(insight.title, "Battery use on track")
+        XCTAssertFalse(insight.summary.localizedCaseInsensitiveContains("damage"))
+        XCTAssertTrue(insight.evidence.contains { $0.contains("higher than usual") })
+    }
+
     func testOpenRouterCatalogIncludesFastBudgetAndCustomReadyModels() {
         let models = IntelligenceModelCatalog.openRouter
         let ids = Set(models.map(\.id))

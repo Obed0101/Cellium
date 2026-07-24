@@ -4,6 +4,20 @@ All notable changes to Cellium are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows semantic versioning where practical.
 
+## [0.1.10] - 2026-07-24
+
+### Added
+
+- Expanded AI evidence with the Mac model, macOS version, architecture, Cellium version, local date/time, timezone, UTC offset, weekday and daylight-saving state.
+- Added weather-location timezone context with a macOS timezone fallback, plus a seven-day estimated computer-use profile with active hours, typical schedule, peak hour and hourly CPU/memory activity.
+- Exposed additional Battery Plan and intelligence evidence for charge limits, external-power pauses, cycle pace, EFC usage and confidence details.
+
+### Changed
+
+- Process names sent in AI evidence are anonymized while preserving process kind, CPU, memory and estimated battery impact.
+- AI instructions now keep health, hardware cycle count, EFC and computer-activity estimates separate, avoid unsupported damage claims and respect insufficient history.
+- Battery history, cycle-plan presentation and deterministic local insight behavior now expose more evidence without clamping equivalent use at 100%.
+
 ## [0.1.9] - 2026-07-24
 
 ### Added

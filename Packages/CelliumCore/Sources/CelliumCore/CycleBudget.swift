@@ -234,13 +234,19 @@ public enum CycleBudgetEngine {
             return projectedWeek / weeklyBudget
         }()
         let status: CyclePaceStatus
-        if rolling24EFC >= 2
+        // The personal baseline describes context; it must not turn a small
+        // absolute amount of use into an alert. A user can be above their
+        // usual pace while still using only a normal fraction of one EFC.
+        let absoluteHighPace = rolling24EFC >= 2
             || rolling24Hardware >= 2
-            || (budgetRatio ?? 0) >= 1.5 && confidence != .low && confidence != .unavailable {
+            || (budgetRatio ?? 0) >= 1.5 && confidence != .low && confidence != .unavailable
+        let absoluteElevatedPace = today.equivalentCycles > 0.20
+            || rolling24EFC > 0.20
+            || (budgetRatio ?? 0) > 1
+
+        if absoluteHighPace {
             status = .high
-        } else if rolling24EFC >= 1
-            || comparison == .higher
-            || (budgetRatio ?? 0) > 1 {
+        } else if absoluteElevatedPace {
             status = .elevated
         } else if confidence == .unavailable {
             status = .insufficientData

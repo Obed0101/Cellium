@@ -16,7 +16,7 @@
 
 Cellium is a native macOS menu bar app for understanding what is happening to your Mac's battery and power system. It collects the signals macOS exposes, keeps history in local SQLite storage, explains patterns without pretending that estimates are measurements, and gives you an optional AI assistant grounded in the same evidence.
 
-The current public release is **Cellium 0.1.9**.
+The current public release is **Cellium 0.1.10**.
 
 ## What Cellium answers
 
@@ -112,9 +112,13 @@ The AI layer is available now as an opt-in feature. Normal monitoring does not r
 - **Chat:** persistent local sessions, session titles, clear/new-session controls and battery-focused conversations.
 - **Analysis:** manual analysis and optional automatic analysis, limited to one short request per hour when enabled and Wi-Fi is available.
 - **Evidence:** structured battery, power, temperature, health, hardware-cycle, EFC pace, budget, system, process, weather and learning context.
-- **Analysis log:** prompt, response, provider, model, status, evidence and recommendations are visible in the Alerts surface.
+- **Device and time context:** the Mac model identifier, macOS version, architecture, Cellium version, local date/time, timezone identifier, UTC offset, local hour, weekday and daylight-saving state are included when available.
+- **Weather context:** the assistant can receive the weather location label, location timezone, condition, temperature, apparent temperature, humidity and wind. The weather location timezone is preferred; macOS's current timezone is the fallback.
+- **Computer-use profile:** up to seven days of hourly CPU/memory aggregates are summarized as estimated active hours per day, typical start/end hours, peak hour and an hourly activity profile. This is an estimate of computer activity, not proof that a person was present.
+- **Privacy:** process names are replaced with generic labels such as `application-1` or `process-2`; CPU, memory and estimated battery impact are retained. No extra IP-location lookup is performed by the AI context builder.
+- **Analysis log:** prompt, response, provider, model, status, evidence and recommendations are visible in the Alerts surface and stored locally.
 - **Response formatting:** AI responses render paragraphs, headings, lists, quotes and code as separate Markdown blocks while preserving inline formatting and escaped line breaks.
-- **Safety:** the assistant must distinguish measured facts from estimates, acknowledge missing history and avoid diagnosing battery damage without supporting evidence.
+- **Safety:** the assistant must distinguish measured facts from estimates, acknowledge missing history, keep battery health separate from hardware cycles and EFC, and avoid diagnosing battery damage without supporting evidence.
 
 ### Local secrets and privacy controls
 
@@ -165,7 +169,7 @@ Intel compatibility, exact per-process wattage, charge automation and Apple-nota
 
 ## Install the latest release
 
-Download the current DMG from [GitHub Releases](https://github.com/Obed0101/Cellium/releases/latest). The current artifact is `Cellium-0.1.9.dmg`.
+Download the current DMG from [GitHub Releases](https://github.com/Obed0101/Cellium/releases/latest). The current artifact is `Cellium-0.1.10.dmg`.
 
 The disk image contains `Cellium.app` and an `Applications` shortcut for drag-to-install. The free release is ad-hoc signed, not Apple-notarized, and macOS may require **System Settings → Privacy & Security → Open Anyway** on first launch. See [Documentation/DISTRIBUTION.md](Documentation/DISTRIBUTION.md) for Developer ID signing and notarization.
 
@@ -189,7 +193,7 @@ To create a local drag-to-Applications installer:
 
 ```bash
 ./Scripts/build-dmg.sh
-open Distribution/Cellium-0.1.9.dmg
+open Distribution/Cellium-0.1.10.dmg
 ```
 
 The distribution script validates the app bundle and DMG. It refuses to overwrite an existing disk image and supports Developer ID signing when configured. See [Documentation/DISTRIBUTION.md](Documentation/DISTRIBUTION.md).

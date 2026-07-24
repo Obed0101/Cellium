@@ -140,6 +140,51 @@ final class CycleUsageTests: XCTestCase {
         XCTAssertEqual(summary.confidence, .medium)
     }
 
+    func testBudgetEngineKeepsTwentyPercentOrLessOnTrackDespiteHigherBaseline() {
+        let calendar = utcCalendar
+        let todayStart = Date(timeIntervalSince1970: 1_700_006_400)
+        let now = todayStart.addingTimeInterval(12 * 3_600)
+        var buckets: [CycleUsageBucket] = []
+        for offset in 1...3 {
+            buckets.append(usageBucket(
+                at: calendar.date(byAdding: .day, value: -offset, to: todayStart)!.addingTimeInterval(8 * 3_600),
+                efc: 0.1,
+                observedSeconds: 3_600
+            ))
+        }
+        buckets.append(usageBucket(
+            at: todayStart.addingTimeInterval(8 * 3_600),
+            efc: 0.17,
+            observedSeconds: 3_600
+        ))
+
+        let summary = CycleBudgetEngine.summarize(
+            quarterHourBuckets: buckets,
+            dailyBuckets: [],
+            currentCycleCount: 153,
+            configuration: CyclePlanConfiguration(),
+            now: now,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(summary.comparison, .higher)
+        XCTAssertEqual(summary.status, .onTrack)
+    }
+
+    func testBudgetEngineRaisesElevatedStatusAboveTwentyPercentAbsoluteUse() {
+        let now = Date(timeIntervalSince1970: 1_700_050_000)
+        let summary = CycleBudgetEngine.summarize(
+            quarterHourBuckets: [usageBucket(at: now.addingTimeInterval(-900), efc: 0.21)],
+            dailyBuckets: [],
+            currentCycleCount: 153,
+            configuration: CyclePlanConfiguration(),
+            now: now,
+            calendar: utcCalendar
+        )
+
+        XCTAssertEqual(summary.status, .elevated)
+    }
+
     func testTargetDateModeDerivesWeeklyBudget() {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let configuration = CyclePlanConfiguration(

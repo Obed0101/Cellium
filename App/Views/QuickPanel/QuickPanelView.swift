@@ -178,9 +178,22 @@ enum HistoryRange: String, CaseIterable, Identifiable {
 
 }
 
-@MainActor
-final class BatteryViewModel: ObservableObject {
+ private struct IntelligenceUsageBucketKey: Hashable {
+     let day: Date
+     let hour: Int
+ }
+
+ private struct IntelligenceUsageBucketSummary {
+     let key: IntelligenceUsageBucketKey
+     let activityScore: Double?
+     let cpuPercent: Double?
+     let memoryPercent: Double?
+ }
+
+ @MainActor
+ final class BatteryViewModel: ObservableObject {
     @Published private(set) var battery: BatterySnapshot
+    @Published private(set) var healthPercent: Double?
     @Published private(set) var system: SystemSnapshot
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var recentSamples: [StoredBatterySample] = [] {
@@ -297,6 +310,7 @@ final class BatteryViewModel: ObservableObject {
     }
 
     private let defaults: UserDefaults
+    private var healthStabilizer = BatteryHealthStabilizer()
     private let batteryReader: IOKitBatteryReader
     private let systemReader: SystemStateReader
     private let coordinator: SamplingCoordinator
@@ -393,7 +407,10 @@ final class BatteryViewModel: ObservableObject {
         self.weatherSnapshot = weatherCoordinator.snapshot
         self.weatherError = weatherCoordinator.errorMessage
         let date = Date()
-        self.battery = batteryReader.readSnapshot(at: date)
+        let initialBattery = batteryReader.readSnapshot(at: date)
+        self.battery = initialBattery
+        let initialHealth = defaults.object(forKey: Self.healthDefaultsKey(for: initialBattery.designCapacityMAh)) as? Double
+        self.healthStabilizer = BatteryHealthStabilizer(initialPercent: initialHealth)
         self.system = systemReader.readSnapshot(at: date)
         self.lastUpdated = date
 
@@ -416,6 +433,7 @@ final class BatteryViewModel: ObservableObject {
         weatherCoordinator.onChange = { [weak self] in
             self?.syncWeatherState()
         }
+        refreshHealthEstimate()
     }
 
     private static func loadIntelligenceMessages(from defaults: UserDefaults) -> [AgentChatMessage] {
@@ -512,11 +530,25 @@ final class BatteryViewModel: ObservableObject {
         persistIntelligenceSessions()
     }
 
-    var healthPercent: Double? {
-        BatteryMath.healthPercent(
+    private func refreshHealthEstimate() {
+        let rawHealth = BatteryMath.healthPercent(
             nominalChargeCapacityMAh: battery.nominalChargeCapacityMAh,
             designCapacityMAh: battery.designCapacityMAh
         )
+        let nextHealth = healthStabilizer.update(rawHealth)
+        if healthPercent != nextHealth {
+            healthPercent = nextHealth
+        }
+        if let nextHealth {
+            defaults.set(nextHealth, forKey: Self.healthDefaultsKey(for: battery.designCapacityMAh))
+        }
+    }
+
+    private static func healthDefaultsKey(for designCapacityMAh: Int?) -> String {
+        guard let designCapacityMAh, designCapacityMAh > 0 else {
+            return "cellium.battery.health.stablePercent.unknown"
+        }
+        return "cellium.battery.health.stablePercent.\(designCapacityMAh)"
     }
 
     var chargeLimitPercent: Int? {
@@ -544,6 +576,20 @@ final class BatteryViewModel: ObservableObject {
             return false
         }
         return battery.externalPowerConnected && charge >= limit
+    }
+
+    /// Equivalent-use history can remain elevated after the Mac is plugged in.
+    /// Keep that historical value, but do not present it as an active discharge
+    /// warning while external power is holding the battery at its limit.
+    var isBatteryUseCurrentlyPausedByExternalPower: Bool {
+        guard battery.externalPowerConnected else { return false }
+        if battery.isCharging || isChargingToLimit || isChargeLimitActive {
+            return true
+        }
+        guard let watts = batteryPowerWatts else {
+            return true
+        }
+        return watts <= 0.05
     }
 
     var batteryPowerWatts: Double? {
@@ -804,7 +850,8 @@ final class BatteryViewModel: ObservableObject {
     }
 
     var learnedBatterySymbol: String {
-        if statusKind == .attention { return "exclamationmark.triangle" }
+        if statusKind == .attention { return "exclamationmark.octagon" }
+        if statusKind == .elevated { return "exclamationmark.triangle" }
         if battery.isCharging || isChargingToLimit || isChargeLimitActive { return "bolt.circle" }
         if learningDaysObserved == 0 { return "hourglass" }
         return "waveform.path.ecg"
@@ -812,6 +859,21 @@ final class BatteryViewModel: ObservableObject {
 
     var learnedBatteryTitle: String {
         guard learningEnabled else { return language == .spanish ? "Aprendizaje pausado" : "Learning paused" }
+        if isBatteryUseCurrentlyPausedByExternalPower {
+            return language == .spanish ? "Alimentación externa activa" : "External power active"
+        }
+        if let cycleUsageSummary {
+            switch cycleUsageSummary.status {
+            case .high:
+                return language == .spanish ? "Uso de batería alto" : "High battery use"
+            case .elevated:
+                return language == .spanish ? "Uso de batería elevado" : "Elevated battery use"
+            case .onTrack:
+                return language == .spanish ? "Uso de batería en ritmo" : "Battery use on track"
+            case .insufficientData:
+                break
+            }
+        }
         switch learningDaysObserved {
         case 0:
             return language == .spanish ? "Reuniendo evidencia" : "Collecting evidence"
@@ -827,6 +889,15 @@ final class BatteryViewModel: ObservableObject {
             return language == .spanish
                 ? "Activa el aprendizaje para comparar días reales."
                 : "Enable learning to compare real usage days."
+        }
+        if isBatteryUseCurrentlyPausedByExternalPower {
+            return language == .spanish
+                ? "Uso acumulado de hoy: la batería está conectada y no hay descarga activa ahora."
+                : "Today's accumulated use: the battery is connected and there is no active discharge now."
+        }
+        if let cycleUsageSummary,
+           cycleUsageSummary.status != .insufficientData {
+            return cycleUsageDetail(cycleUsageSummary)
         }
         guard learningDaysObserved > 0 else {
             return language == .spanish
@@ -862,6 +933,38 @@ final class BatteryViewModel: ObservableObject {
             : "Now: \(charge), \(state). There are \(learningDaysObserved) observed \(dayWord), but not enough power data for a trend yet."
     }
 
+    private func cycleUsageDetail(_ summary: CycleUsageSummary) -> String {
+        let usage = String(format: "%.0f%% (%.2f EFC)", summary.todayUsagePercent, summary.todayEquivalentCycles)
+        let rolling = String(format: "%.2f EFC", summary.rolling24HourEquivalentCycles)
+        let hardware = "+\(summary.rolling24HourHardwareCycleDelta)"
+        let absolutePaceIsElevated = summary.todayEquivalentCycles > 0.20
+            || summary.rolling24HourEquivalentCycles > 0.20
+
+        switch summary.status {
+        case .high:
+            return language == .spanish
+                ? "Hoy: \(usage); últimas 24 h: \(rolling), contador medido \(hardware). Ritmo alto de uso, no diagnóstico de daño."
+                : "Today: \(usage); last 24h: \(rolling), measured counter \(hardware). High usage pace, not a damage diagnosis."
+        case .elevated:
+            if absolutePaceIsElevated {
+                return language == .spanish
+                    ? "Hoy: \(usage); últimas 24 h: \(rolling). Supera el umbral absoluto del 20% de uso equivalente; revisa las apps antes de atribuirlo a desgaste."
+                    : "Today: \(usage); last 24h: \(rolling). It is above the absolute 20% equivalent-use threshold; review apps before attributing it to wear."
+            }
+            return language == .spanish
+                ? "Hoy: \(usage); últimas 24 h: \(rolling). El plan configurado está por encima de su presupuesto, aunque el uso absoluto sigue bajo."
+                : "Today: \(usage); last 24h: \(rolling). The configured plan is above budget, although absolute use remains low."
+        case .onTrack:
+            return language == .spanish
+                ? "Hoy: \(usage); últimas 24 h: \(rolling), contador medido \(hardware). Dentro del umbral absoluto del 20%; el baseline solo aporta contexto."
+                : "Today: \(usage); last 24h: \(rolling), measured counter \(hardware). Within the absolute 20% threshold; the baseline is context only."
+        case .insufficientData:
+            return language == .spanish
+                ? "Aún no hay datos suficientes para clasificar el ritmo de ciclos."
+                : "There is not enough data yet to classify cycle pace."
+        }
+    }
+
     private var learningAveragePowerWatts: Double? {
         let values = learningAggregates.compactMap(\.averageBatteryPowerWatts)
             .filter { $0.isFinite && abs($0) >= 0.05 }
@@ -891,6 +994,12 @@ final class BatteryViewModel: ObservableObject {
         if let disk = system.diskUsedPercent, disk >= 95 {
             return .attention
         }
+        if isBatteryUseCurrentlyPausedByExternalPower {
+            if isChargeLimitActive {
+                return .connectedNotCharging
+            }
+            return .charging
+        }
         if cycleUsageSummary?.status == .high {
             return .attention
         }
@@ -907,6 +1016,36 @@ final class BatteryViewModel: ObservableObject {
             return .connectedNotCharging
         }
         return .protected
+    }
+
+    var cycleUsageIsPrimaryStatus: Bool {
+        guard !isBatteryUseCurrentlyPausedByExternalPower else { return false }
+        guard let cycleStatus = cycleUsageSummary?.status,
+              cycleStatus == .elevated || cycleStatus == .high else {
+            return false
+        }
+        if system.thermalState == .serious || system.thermalState == .critical {
+            return false
+        }
+        if let temperature = battery.temperatureCelsius, temperature >= temperatureAlertCelsius {
+            return false
+        }
+        if let charge = battery.chargePercent, charge <= criticalChargePercent {
+            return false
+        }
+        if let dischargeRate = effectiveBatteryPercentPerMinute, dischargeRate >= 0.35 {
+            return false
+        }
+        if let cpu = system.cpuUsagePercent, cpu >= 80 {
+            return false
+        }
+        if let memory = system.memoryUsedPercent, memory >= 90 {
+            return false
+        }
+        if let disk = system.diskUsedPercent, disk >= 95 {
+            return false
+        }
+        return true
     }
 
     var statusTitle: String {
@@ -955,7 +1094,8 @@ final class BatteryViewModel: ObservableObject {
         if let disk = system.diskUsedPercent, disk >= 95 {
             return String(format: copy(.diskAlert), disk)
         }
-        if let cycleUsageSummary, cycleUsageSummary.status == .high {
+        if !isBatteryUseCurrentlyPausedByExternalPower,
+           let cycleUsageSummary, cycleUsageSummary.status == .high {
             return language == .spanish
                 ? String(
                     format: "Uso alto: %.2f ciclos equivalentes y +%d ciclos medidos en las últimas 24 h. Esto indica ritmo alto, no daño confirmado.",
@@ -968,7 +1108,8 @@ final class BatteryViewModel: ObservableObject {
                     cycleUsageSummary.rolling24HourHardwareCycleDelta
                 )
         }
-        if let cycleUsageSummary, cycleUsageSummary.status == .elevated {
+        if !isBatteryUseCurrentlyPausedByExternalPower,
+           let cycleUsageSummary, cycleUsageSummary.status == .elevated {
             return language == .spanish
                 ? String(
                     format: "Uso elevado: %.0f%% de una carga completa equivalente hoy. Revisa el ritmo y la proyección semanal.",
@@ -1626,6 +1767,13 @@ final class BatteryViewModel: ObservableObject {
         }
     }
 
+    func clearIntelligenceAnalysisLog() {
+        intelligenceAnalysisLogs = []
+        Task {
+            try? await store?.clearIntelligenceAnalyses()
+        }
+    }
+
      func requestIntelligenceAnalysis() {
          refreshLocalIntelligenceInsight()
          wifiAvailable = wifiMonitor.isWiFiAvailable
@@ -2078,6 +2226,7 @@ final class BatteryViewModel: ObservableObject {
     }
 
     private func makeIntelligenceEvidence() -> BatteryEvidenceSnapshot {
+        let capturedAt = Date()
         let recentHistory = recentSamples.prefix(60).map { sample in
             BatteryEvidencePoint(
                 timestamp: sample.battery.timestamp,
@@ -2086,17 +2235,17 @@ final class BatteryViewModel: ObservableObject {
                 temperatureCelsius: sample.battery.temperatureCelsius
             )
         }
-        let processEvidence = processImpacts.prefix(6).map {
+        let processEvidence = processImpacts.prefix(6).enumerated().map { index, impact in
             ProcessEvidence(
-                name: $0.name,
-                kind: $0.kind.rawValue,
-                cpuPercent: $0.averageCPUPercent,
-                memoryPercent: $0.memoryPercent,
-                estimatedBatteryPercentPerMinute: $0.estimatedBatteryPercentPerMinute
+                name: "\(impact.kind.rawValue)-\(index + 1)",
+                kind: impact.kind.rawValue,
+                cpuPercent: impact.averageCPUPercent,
+                memoryPercent: impact.memoryPercent,
+                estimatedBatteryPercentPerMinute: impact.estimatedBatteryPercentPerMinute
             )
         }
         return BatteryEvidenceSnapshot(
-            capturedAt: lastUpdated ?? Date(),
+             capturedAt: capturedAt,
             chargePercent: battery.chargePercent,
             isCharging: battery.isCharging,
             externalPowerConnected: battery.externalPowerConnected,
@@ -2109,26 +2258,32 @@ final class BatteryViewModel: ObservableObject {
             thermalState: system.thermalState,
             lowPowerModeEnabled: system.lowPowerModeEnabled,
             cpuUsagePercent: system.cpuUsagePercent,
-            memoryUsedPercent: system.memoryUsedPercent,
-            diskUsedPercent: system.diskUsedPercent,
+             memoryUsedPercent: system.memoryUsedPercent,
+             diskUsedPercent: system.diskUsedPercent,
              learningDaysObserved: learningDaysObserved,
-              recentHistory: recentHistory,
-              processImpacts: processEvidence,
-              context: makeIntelligenceContext(),
-              cycleUsage: cycleUsageSummary
-          )
-     }
+             recentHistory: recentHistory,
+             processImpacts: processEvidence,
+             context: makeIntelligenceContext(at: capturedAt),
+             cycleUsage: cycleUsageSummary,
+             chargeLimitPercent: chargeLimitPercent,
+             isChargeLimitActive: isChargeLimitActive,
+             batteryUsePausedByExternalPower: isBatteryUseCurrentlyPausedByExternalPower
+           )
+      }
 
-     private func makeIntelligenceContext() -> IntelligenceContext {
-         let device = IntelligenceDeviceContext(
-             modelIdentifier: macModelIdentifier(),
-             operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
-             architecture: machineArchitecture()
-         )
-         let weather = weatherSnapshot.map {
-             IntelligenceWeatherContext(
-                 locationLabel: $0.locationLabel,
-                 condition: $0.conditionLabel(for: language),
+      private func makeIntelligenceContext(at capturedAt: Date) -> IntelligenceContext {
+          let (timeZone, timeZoneSource) = intelligenceTimeZone()
+          let device = IntelligenceDeviceContext(
+              modelIdentifier: macModelIdentifier(),
+              operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
+              architecture: machineArchitecture(),
+              appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+          )
+          let weather = weatherSnapshot.map {
+              IntelligenceWeatherContext(
+                  locationLabel: $0.locationLabel,
+                  timezoneIdentifier: $0.timezoneIdentifier,
+                  condition: $0.conditionLabel(for: language),
                  temperatureCelsius: $0.temperatureCelsius,
                  apparentTemperatureCelsius: $0.apparentTemperatureCelsius,
                  relativeHumidityPercent: $0.relativeHumidity,
@@ -2158,14 +2313,126 @@ final class BatteryViewModel: ObservableObject {
              averageTemperatureCelsius: average(weeklyAggregates.compactMap(\.averageTemperatureCelsius)),
              averageCPUUsagePercent: average(weeklyAggregates.compactMap(\.averageCPUUsagePercent)),
              averageMemoryUsedPercent: average(weeklyAggregates.compactMap(\.averageMemoryUsedPercent)),
-             days: weeklyDays
-         )
-         return IntelligenceContext(
-             device: device,
-             weather: weather,
-             weeklyLearning: weeklyLearning
-         )
-     }
+              days: weeklyDays
+          )
+          return IntelligenceContext(
+              device: device,
+              weather: weather,
+              weeklyLearning: weeklyLearning,
+              time: makeIntelligenceTimeContext(
+                  at: capturedAt,
+                  timeZone: timeZone,
+                  source: timeZoneSource
+              ),
+              usage: makeIntelligenceUsageContext(timeZone: timeZone)
+          )
+      }
+
+      private func intelligenceTimeZone() -> (timeZone: TimeZone, source: String) {
+          if let identifier = weatherSnapshot?.timezoneIdentifier,
+             let timeZone = TimeZone(identifier: identifier) {
+              return (timeZone, "weather-location")
+          }
+          return (.autoupdatingCurrent, "macOS")
+      }
+
+      private func makeIntelligenceTimeContext(
+          at date: Date,
+          timeZone: TimeZone,
+          source: String
+      ) -> IntelligenceTimeContext {
+          var calendar = Calendar(identifier: .gregorian)
+          calendar.timeZone = timeZone
+          let formatter = DateFormatter()
+          formatter.calendar = calendar
+          formatter.locale = Locale(identifier: "en_US_POSIX")
+          formatter.timeZone = timeZone
+          formatter.dateFormat = "yyyy-MM-dd HH:mm:ss zzz"
+          return IntelligenceTimeContext(
+              localDateTime: formatter.string(from: date),
+              timeZoneIdentifier: timeZone.identifier,
+              utcOffsetMinutes: timeZone.secondsFromGMT(for: date) / 60,
+              localHour: calendar.component(.hour, from: date),
+              dayOfWeek: calendar.component(.weekday, from: date),
+              isDaylightSavingTime: timeZone.isDaylightSavingTime(for: date),
+              source: source
+          )
+      }
+
+      private func makeIntelligenceUsageContext(timeZone: TimeZone) -> IntelligenceUsageContext? {
+          guard !learningHourlyAggregates.isEmpty else { return nil }
+          var calendar = Calendar(identifier: .gregorian)
+          calendar.timeZone = timeZone
+          let grouped = Dictionary(grouping: learningHourlyAggregates) { aggregate in
+              IntelligenceUsageBucketKey(
+                  day: calendar.startOfDay(for: aggregate.bucketStart),
+                  hour: calendar.component(.hour, from: aggregate.bucketStart)
+              )
+          }
+          let summaries = grouped.values.compactMap { aggregates -> IntelligenceUsageBucketSummary? in
+              guard let first = aggregates.first else { return nil }
+              let cpu = average(aggregates.compactMap(\.averageCPUUsagePercent))
+              let memory = average(aggregates.compactMap(\.averageMemoryUsedPercent))
+              guard cpu != nil || memory != nil else { return nil }
+              return IntelligenceUsageBucketSummary(
+                  key: IntelligenceUsageBucketKey(
+                      day: calendar.startOfDay(for: first.bucketStart),
+                      hour: calendar.component(.hour, from: first.bucketStart)
+                  ),
+                  activityScore: usageActivityScore(cpuPercent: cpu, memoryPercent: memory),
+                  cpuPercent: cpu,
+                  memoryPercent: memory
+              )
+          }
+          guard !summaries.isEmpty else { return nil }
+
+          let dayGroups = Dictionary(grouping: summaries, by: \.key.day)
+          let activeHoursPerDay = dayGroups.values.map { day in
+              Double(day.filter { ($0.activityScore ?? 0) >= 0.15 }.count)
+          }
+          let hourlyGroups = Dictionary(grouping: summaries, by: \.key.hour)
+          let hourlyProfile = hourlyGroups.keys.sorted().compactMap { hour -> IntelligenceUsageHour? in
+              guard let values = hourlyGroups[hour], !values.isEmpty else { return nil }
+              let averageScore = average(values.compactMap(\.activityScore))
+              return IntelligenceUsageHour(
+                  localHour: hour,
+                  observedDays: Set(values.map(\.key.day)).count,
+                  activeDays: values.filter { ($0.activityScore ?? 0) >= 0.15 }.count,
+                  averageActivityScore: averageScore,
+                  averageCPUPercent: average(values.compactMap(\.cpuPercent)),
+                  averageMemoryUsedPercent: average(values.compactMap(\.memoryPercent))
+              )
+          }
+          let activeProfile = hourlyProfile.filter { ($0.averageActivityScore ?? 0) >= 0.15 }
+          let peakHour = hourlyProfile.max {
+              ($0.averageActivityScore ?? 0) < ($1.averageActivityScore ?? 0)
+          }?.localHour
+          return IntelligenceUsageContext(
+              windowDays: 7,
+              observedDays: min(7, max(learningDaysObserved, dayGroups.count)),
+              sampleCount: learningHourlyAggregates.reduce(0) { $0 + $1.sampleCount },
+              averageActiveHoursPerDay: average(activeHoursPerDay),
+              typicalStartLocalHour: activeProfile.map(\.localHour).min(),
+              typicalEndLocalHour: activeProfile.map(\.localHour).max(),
+              peakLocalHour: peakHour,
+              hourlyProfile: hourlyProfile
+          )
+      }
+
+      private func usageActivityScore(cpuPercent: Double?, memoryPercent: Double?) -> Double? {
+          let cpu = cpuPercent.map { min(1, max(0, $0 / 100)) }
+          let memory = memoryPercent.map { min(1, max(0, $0 / 100)) }
+          switch (cpu, memory) {
+          case let (.some(cpu), .some(memory)):
+              return cpu * 0.6 + memory * 0.4
+          case let (.some(cpu), nil):
+              return cpu
+          case let (nil, .some(memory)):
+              return memory
+          case (nil, nil):
+              return nil
+          }
+      }
 
      private func average(_ values: [Double]) -> Double? {
          let finiteValues = values.filter { $0.isFinite }
@@ -2535,6 +2802,7 @@ final class BatteryViewModel: ObservableObject {
         let date = Date()
         battery = batteryReader.readSnapshot(at: date)
         system = systemReader.readSnapshot(at: date)
+        refreshHealthEstimate()
         lastUpdated = date
         if includeProcessImpacts {
             refreshProcessImpactsIfNeeded(
@@ -2639,7 +2907,8 @@ final class BatteryViewModel: ObservableObject {
 
     private func evaluateProactiveSignals() {
         var candidates: [(score: Int, alert: ProactiveAlert)] = []
-        if cyclePlanConfiguration.enabled,
+        if !isBatteryUseCurrentlyPausedByExternalPower,
+           cyclePlanConfiguration.enabled,
            cyclePlanConfiguration.alertsEnabled,
            let summary = cycleUsageSummary,
            summary.status == .elevated || summary.status == .high {

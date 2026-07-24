@@ -309,6 +309,27 @@ final class SQLiteStoreTests: XCTestCase {
         XCTAssertEqual(count, 0)
     }
 
+    func testClearIntelligenceAnalysesRemovesPersistedLog() async throws {
+        let store = try makeStore()
+        let analysis = StoredIntelligenceAnalysis(
+            requestedAt: Date(),
+            kind: .analysis,
+            provider: "openRouter",
+            model: "test/model",
+            languageCode: "en",
+            prompt: "[system]\nRespond in English",
+            status: .succeeded
+        )
+
+        _ = try await store.appendIntelligenceAnalysis(analysis)
+        try await store.clearIntelligenceAnalyses()
+
+        let logs = try await store.fetchIntelligenceAnalyses()
+        let count = try await store.intelligenceAnalysisCount()
+        XCTAssertTrue(logs.isEmpty)
+        XCTAssertEqual(count, 0)
+    }
+
     func testRejectsInvalidAlertMeasurements() async throws {
         let store = try makeStore()
         let invalid = StoredAlertEvent(
