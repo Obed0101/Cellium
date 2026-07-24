@@ -8,12 +8,14 @@ public actor SQLiteStore {
 
     private var connection: SQLiteHandle?
     private var lastRetentionRun: Date?
+    private var cycleUsageTracker: CycleUsageTracker
 
     public init(databaseURL: URL, configuration: StoreConfiguration = StoreConfiguration()) throws {
         self.databaseURL = databaseURL
         self.configuration = configuration
         self.connection = nil
         self.lastRetentionRun = nil
+        self.cycleUsageTracker = CycleUsageTracker()
 
         do {
             try Self.createParentDirectory(for: databaseURL)
@@ -43,6 +45,9 @@ public actor SQLiteStore {
         do {
             try Self.configure(openedConnection)
             try Self.migrate(openedConnection)
+            if let state = try Self.loadCycleUsageTrackerState(connection: openedConnection) {
+                self.cycleUsageTracker = CycleUsageTracker(state: state)
+            }
         } catch {
             throw error
         }
@@ -80,6 +85,8 @@ public actor SQLiteStore {
         guard !samples.isEmpty || !sessions.isEmpty else { return [] }
 
         let connection = try requireConnection()
+        var nextCycleUsageTracker = cycleUsageTracker
+        let cycleUsageUpdates = nextCycleUsageTracker.ingest(samples)
         var ids: [Int64] = []
         do {
             try Self.execute("BEGIN IMMEDIATE;", connection: connection)
@@ -117,10 +124,18 @@ public actor SQLiteStore {
                 for aggregate in try Self.aggregateBatches(samples) {
                     try Self.upsert(aggregate, connection: connection)
                 }
+                for bucket in cycleUsageUpdates {
+                    try Self.upsertCycleUsage(bucket, connection: connection)
+                }
+                try Self.saveCycleUsageTrackerState(
+                    nextCycleUsageTracker.state,
+                    connection: connection
+                )
             }
 
             try Self.insertSessions(sessions, connection: connection)
             try Self.execute("COMMIT;", connection: connection)
+            cycleUsageTracker = nextCycleUsageTracker
         } catch {
             try? Self.execute("ROLLBACK;", connection: connection)
             throw error
@@ -411,6 +426,83 @@ public actor SQLiteStore {
                 throw Self.sqliteError(connection)
             }
         }
+    }
+
+    public func fetchCycleUsage(
+        resolution: CycleUsageResolution,
+        since: Date? = nil,
+        until: Date? = nil,
+        limit: Int = 100
+    ) throws -> [StoredCycleUsageBucket] {
+        guard limit > 0 else { return [] }
+        let connection = try requireConnection()
+        let table = Self.cycleUsageTable(for: resolution)
+        let predicates = [
+            since.map { _ in "timestamp >= ?" },
+            until.map { _ in "timestamp < ?" }
+        ].compactMap { $0 }
+        let whereClause = predicates.isEmpty ? "" : "WHERE " + predicates.joined(separator: " AND ")
+        let statement = try Self.prepare(
+            """
+            SELECT payload
+            FROM \(table)
+            \(whereClause)
+            ORDER BY timestamp DESC, id DESC
+            LIMIT ?;
+            """,
+            connection: connection
+        )
+        defer { sqlite3_finalize(statement) }
+
+        var bindIndex: Int32 = 1
+        if let since {
+            guard sqlite3_bind_double(statement, bindIndex, since.timeIntervalSince1970) == SQLITE_OK else {
+                throw Self.sqliteError(connection)
+            }
+            bindIndex += 1
+        }
+        if let until {
+            guard sqlite3_bind_double(statement, bindIndex, until.timeIntervalSince1970) == SQLITE_OK else {
+                throw Self.sqliteError(connection)
+            }
+            bindIndex += 1
+        }
+        guard sqlite3_bind_int(statement, bindIndex, Int32(min(limit, 10_000))) == SQLITE_OK else {
+            throw Self.sqliteError(connection)
+        }
+
+        var buckets: [StoredCycleUsageBucket] = []
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        while true {
+            switch sqlite3_step(statement) {
+            case SQLITE_ROW:
+                guard let text = sqlite3_column_text(statement, 0) else {
+                    throw StoreError.invalidData
+                }
+                let data = Data(bytes: text, count: Int(sqlite3_column_bytes(statement, 0)))
+                do {
+                    let bucket = try decoder.decode(StoredCycleUsageBucket.self, from: data)
+                    guard bucket.resolution == resolution else { throw StoreError.invalidData }
+                    buckets.append(bucket)
+                } catch let error as StoreError {
+                    throw error
+                } catch {
+                    throw StoreError.invalidData
+                }
+            case SQLITE_DONE:
+                return buckets
+            default:
+                throw Self.sqliteError(connection)
+            }
+        }
+    }
+
+    public func cycleUsageCount(resolution: CycleUsageResolution) throws -> Int {
+        try Self.scalarInt(
+            "SELECT COUNT(*) FROM \(Self.cycleUsageTable(for: resolution));",
+            connection: requireConnection()
+        )
     }
 
     public func fetchSessions(
@@ -782,10 +874,20 @@ public actor SQLiteStore {
                 table: "battery_samples_quarter_hour",
                 connection: connection
             )
+            deleted += try Self.deleteSamples(
+                before: now.addingTimeInterval(-Double(configuration.quarterHourRetentionDays) * 86_400),
+                table: "cycle_usage_quarter_hour",
+                connection: connection
+            )
             if let dailyRetentionDays = configuration.dailyRetentionDays {
                 deleted += try Self.deleteSamples(
                     before: now.addingTimeInterval(-Double(dailyRetentionDays) * 86_400),
                     table: "daily_summaries",
+                    connection: connection
+                )
+                deleted += try Self.deleteSamples(
+                    before: now.addingTimeInterval(-Double(dailyRetentionDays) * 86_400),
+                    table: "cycle_usage_daily",
                     connection: connection
                 )
             }
@@ -902,7 +1004,7 @@ _ sql: String, connection: OpaquePointer) throws -> Int {
                 "SELECT COALESCE(MAX(version), 0) FROM schema_migrations;",
                 connection: connection
             )
-            guard currentVersion <= 3 else {
+            guard currentVersion <= 4 else {
                 throw StoreError.unsupportedSchema(version: currentVersion)
             }
 
@@ -912,6 +1014,9 @@ _ sql: String, connection: OpaquePointer) throws -> Int {
                 }
                 if currentVersion < 3 {
                     try migrateIntelligenceAnalyses(connection)
+                }
+                if currentVersion < 4 {
+                    try migrateCycleUsage(connection)
                 }
                 return
             }
@@ -1020,6 +1125,7 @@ _ sql: String, connection: OpaquePointer) throws -> Int {
                 try execute("COMMIT;", connection: connection)
             try migrateAlertEvents(connection)
             try migrateIntelligenceAnalyses(connection)
+            try migrateCycleUsage(connection)
         } catch {
             try? execute("ROLLBACK;", connection: connection)
             guard let storeError = error as? StoreError else {
@@ -1077,6 +1183,200 @@ _ sql: String, connection: OpaquePointer) throws -> Int {
             bindDouble: Date().timeIntervalSince1970
         )
         try execute("COMMIT;", connection: connection)
+    }
+
+    private static func migrateCycleUsage(_ connection: OpaquePointer) throws {
+        try execute("BEGIN IMMEDIATE;", connection: connection)
+        do {
+            try execute(
+                """
+                CREATE TABLE IF NOT EXISTS cycle_usage_quarter_hour (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp REAL NOT NULL UNIQUE,
+                    payload TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_cycle_usage_quarter_hour_timestamp
+                    ON cycle_usage_quarter_hour(timestamp);
+
+                CREATE TABLE IF NOT EXISTS cycle_usage_daily (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp REAL NOT NULL UNIQUE,
+                    payload TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_cycle_usage_daily_timestamp
+                    ON cycle_usage_daily(timestamp);
+
+                CREATE TABLE IF NOT EXISTS cycle_usage_state (
+                    key TEXT PRIMARY KEY,
+                    payload TEXT NOT NULL,
+                    updated_at REAL NOT NULL
+                );
+                """,
+                connection: connection
+            )
+            try backfillCycleUsageIfNeeded(connection: connection)
+            try execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (4, ?);",
+                connection: connection,
+                bindDouble: Date().timeIntervalSince1970
+            )
+            try execute("COMMIT;", connection: connection)
+        } catch {
+            try? execute("ROLLBACK;", connection: connection)
+            throw error
+        }
+    }
+
+    private static func backfillCycleUsageIfNeeded(connection: OpaquePointer) throws {
+        let existingBuckets = try scalarInt(
+            "SELECT (SELECT COUNT(*) FROM cycle_usage_quarter_hour) + (SELECT COUNT(*) FROM cycle_usage_daily);",
+            connection: connection
+        )
+        guard existingBuckets == 0,
+              try tableExists("battery_samples_raw", connection: connection) else {
+            return
+        }
+
+        let statement = try prepare(
+            "SELECT payload FROM battery_samples_raw ORDER BY timestamp ASC, id ASC;",
+            connection: connection
+        )
+        defer { sqlite3_finalize(statement) }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        var tracker = CycleUsageTracker()
+        var updates: [String: StoredCycleUsageBucket] = [:]
+
+        while true {
+            switch sqlite3_step(statement) {
+            case SQLITE_ROW:
+                guard let text = sqlite3_column_text(statement, 0) else {
+                    throw StoreError.invalidData
+                }
+                let data = Data(bytes: text, count: Int(sqlite3_column_bytes(statement, 0)))
+                let sample: StoredBatterySample
+                do {
+                    sample = try decoder.decode(StoredBatterySample.self, from: data)
+                } catch {
+                    throw StoreError.invalidData
+                }
+                for bucket in tracker.ingest(sample) {
+                    updates["\(bucket.resolution.rawValue):\(bucket.bucketStart.timeIntervalSince1970)"] = bucket
+                }
+            case SQLITE_DONE:
+                for bucket in updates.values {
+                    try upsertCycleUsage(bucket, connection: connection)
+                }
+                try saveCycleUsageTrackerState(tracker.state, connection: connection)
+                return
+            default:
+                throw sqliteError(connection)
+            }
+        }
+    }
+
+    private static func tableExists(_ table: String, connection: OpaquePointer) throws -> Bool {
+        let statement = try prepare(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?;",
+            connection: connection
+        )
+        defer { sqlite3_finalize(statement) }
+        let bindResult = table.withCString {
+            sqlite3_bind_text(statement, 1, $0, -1, sqliteTransient)
+        }
+        guard bindResult == SQLITE_OK,
+              sqlite3_step(statement) == SQLITE_ROW else {
+            throw sqliteError(connection)
+        }
+        return sqlite3_column_int64(statement, 0) > 0
+    }
+
+    private static func cycleUsageTable(for resolution: CycleUsageResolution) -> String {
+        switch resolution {
+        case .quarterHour: return "cycle_usage_quarter_hour"
+        case .day: return "cycle_usage_daily"
+        }
+    }
+
+    private static func upsertCycleUsage(
+        _ bucket: StoredCycleUsageBucket,
+        connection: OpaquePointer
+    ) throws {
+        let statement = try prepare(
+            """
+            INSERT INTO \(cycleUsageTable(for: bucket.resolution)) (timestamp, payload)
+            VALUES (?, ?)
+            ON CONFLICT(timestamp) DO UPDATE SET payload = excluded.payload;
+            """,
+            connection: connection
+        )
+        defer { sqlite3_finalize(statement) }
+        let payload = try encode(bucket)
+        guard sqlite3_bind_double(statement, 1, bucket.bucketStart.timeIntervalSince1970) == SQLITE_OK else {
+            throw sqliteError(connection)
+        }
+        let bindResult = payload.withCString {
+            sqlite3_bind_text(statement, 2, $0, -1, sqliteTransient)
+        }
+        guard bindResult == SQLITE_OK,
+              sqlite3_step(statement) == SQLITE_DONE else {
+            throw sqliteError(connection)
+        }
+    }
+
+    private static func saveCycleUsageTrackerState(
+        _ state: StoredCycleUsageTrackerState,
+        connection: OpaquePointer
+    ) throws {
+        let statement = try prepare(
+            """
+            INSERT INTO cycle_usage_state (key, payload, updated_at)
+            VALUES ('tracker', ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                payload = excluded.payload,
+                updated_at = excluded.updated_at;
+            """,
+            connection: connection
+        )
+        defer { sqlite3_finalize(statement) }
+        let payload = try encode(state)
+        let bindResult = payload.withCString {
+            sqlite3_bind_text(statement, 1, $0, -1, sqliteTransient)
+        }
+        guard bindResult == SQLITE_OK,
+              sqlite3_bind_double(statement, 2, Date().timeIntervalSince1970) == SQLITE_OK,
+              sqlite3_step(statement) == SQLITE_DONE else {
+            throw sqliteError(connection)
+        }
+    }
+
+    private static func loadCycleUsageTrackerState(
+        connection: OpaquePointer
+    ) throws -> StoredCycleUsageTrackerState? {
+        guard try tableExists("cycle_usage_state", connection: connection) else { return nil }
+        let statement = try prepare(
+            "SELECT payload FROM cycle_usage_state WHERE key = 'tracker' LIMIT 1;",
+            connection: connection
+        )
+        defer { sqlite3_finalize(statement) }
+        switch sqlite3_step(statement) {
+        case SQLITE_DONE:
+            return nil
+        case SQLITE_ROW:
+            guard let text = sqlite3_column_text(statement, 0) else {
+                throw StoreError.invalidData
+            }
+            let data = Data(bytes: text, count: Int(sqlite3_column_bytes(statement, 0)))
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .millisecondsSince1970
+            do {
+                return try decoder.decode(StoredCycleUsageTrackerState.self, from: data)
+            } catch {
+                throw StoreError.invalidData
+            }
+        default:
+            throw sqliteError(connection)
+        }
     }
 
     private static func sessionTable(for kind: BatterySessionKind) -> String {
@@ -1655,6 +1955,30 @@ _ sql: String, connection: OpaquePointer) throws -> Int {
                 throw StoreError.invalidData
             }
             return encoded
+        } catch {
+            throw StoreError.invalidData
+        }
+    }
+
+    private static func encode(_ bucket: StoredCycleUsageBucket) throws -> String {
+        try encodeCycleUsageValue(bucket)
+    }
+
+    private static func encode(_ state: StoredCycleUsageTrackerState) throws -> String {
+        try encodeCycleUsageValue(state)
+    }
+
+    private static func encodeCycleUsageValue<T: Encodable>(_ value: T) throws -> String {
+        do {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .millisecondsSince1970
+            let data = try encoder.encode(value)
+            guard let encoded = String(data: data, encoding: .utf8) else {
+                throw StoreError.invalidData
+            }
+            return encoded
+        } catch let error as StoreError {
+            throw error
         } catch {
             throw StoreError.invalidData
         }

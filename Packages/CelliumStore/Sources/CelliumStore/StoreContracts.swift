@@ -30,6 +30,8 @@ public struct StoreConfiguration: Sendable, Equatable {
 }
 
 public typealias StoredBatterySample = BatterySample
+public typealias StoredCycleUsageBucket = CycleUsageBucket
+public typealias StoredCycleUsageTrackerState = CycleUsageTrackerState
 
 public enum StoredProcessKind: String, Codable, CaseIterable, Sendable {
     case application

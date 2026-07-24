@@ -387,6 +387,7 @@ public struct BatteryEvidenceSnapshot: Codable, Equatable, Sendable {
     public let recentHistory: [BatteryEvidencePoint]
     public let processImpacts: [ProcessEvidence]
     public let context: IntelligenceContext?
+    public let cycleUsage: CycleUsageSummary?
 
     public init(
         capturedAt: Date = Date(),
@@ -407,7 +408,8 @@ public struct BatteryEvidenceSnapshot: Codable, Equatable, Sendable {
         learningDaysObserved: Int,
         recentHistory: [BatteryEvidencePoint] = [],
         processImpacts: [ProcessEvidence] = [],
-        context: IntelligenceContext? = nil
+        context: IntelligenceContext? = nil,
+        cycleUsage: CycleUsageSummary? = nil
     ) {
         self.capturedAt = capturedAt
         self.chargePercent = chargePercent
@@ -428,6 +430,7 @@ public struct BatteryEvidenceSnapshot: Codable, Equatable, Sendable {
         self.recentHistory = recentHistory
         self.processImpacts = processImpacts
         self.context = context
+        self.cycleUsage = cycleUsage
     }
 }
 
@@ -622,11 +625,15 @@ public enum BatteryInsightEngine {
         var recommendations: [String] = []
         var severity: BatteryInsightSeverity = .info
         var confidence: Confidence = .medium
+        var hasImmediateCriticalSignal = false
+        var hasHighCyclePace = false
+        var hasElevatedCyclePace = false
 
         if let charge = snapshot.chargePercent {
             evidence.append(spanish ? "Nivel medido: \(charge)%" : "Measured charge: \(charge)%")
             if charge <= 10 {
                 severity = .critical
+                hasImmediateCriticalSignal = true
                 recommendations.append(spanish ? "Conecta energía pronto." : "Connect power soon.")
             } else if charge <= 20 {
                 severity = maxSeverity(severity, .warning)
@@ -658,6 +665,52 @@ public enum BatteryInsightEngine {
             }
         }
 
+        if let usage = snapshot.cycleUsage {
+            evidence.append(String(
+                format: spanish
+                    ? "Uso de batería estimado hoy: %.0f%% (%.2f ciclos equivalentes)"
+                    : "Estimated battery use today: %.0f%% (%.2f equivalent cycles)",
+                usage.todayUsagePercent,
+                usage.todayEquivalentCycles
+            ))
+            evidence.append(spanish
+                ? "Cambio medido del contador: +\(usage.todayHardwareCycleDelta) hoy, +\(usage.rolling24HourHardwareCycleDelta) en 24 h"
+                : "Measured counter change: +\(usage.todayHardwareCycleDelta) today, +\(usage.rolling24HourHardwareCycleDelta) in 24h"
+            )
+            switch usage.comparison {
+            case .lower:
+                evidence.append(spanish ? "El consumo de hoy es menor que lo habitual a esta hora." : "Today's use is lower than usual at this time.")
+            case .usual:
+                evidence.append(spanish ? "El consumo de hoy está dentro de lo habitual a esta hora." : "Today's use is within the usual range at this time.")
+            case .higher:
+                evidence.append(spanish ? "El consumo de hoy es mayor que lo habitual a esta hora." : "Today's use is higher than usual at this time.")
+            case .insufficientData:
+                evidence.append(spanish
+                    ? "Aún no hay suficientes días comparables para definir el ritmo habitual."
+                    : "There are not enough comparable days yet to define the usual pace."
+                )
+            }
+
+            switch usage.status {
+            case .high:
+                hasHighCyclePace = true
+                severity = .critical
+                recommendations.append(spanish
+                    ? "Reduce descargas evitables si quieres bajar el ritmo; esta señal indica uso alto, no daño confirmado."
+                    : "Reduce avoidable discharging if you want to lower the pace; this signal means high use, not confirmed damage."
+                )
+            case .elevated:
+                hasElevatedCyclePace = true
+                severity = maxSeverity(severity, .warning)
+                recommendations.append(spanish
+                    ? "Revisa el uso acumulado y la proyección semanal; salud y ritmo de ciclos siguen siendo señales distintas."
+                    : "Review accumulated use and the weekly projection; health and cycle pace remain separate signals."
+                )
+            case .onTrack, .insufficientData:
+                break
+            }
+        }
+
         if let temperature = snapshot.temperatureCelsius {
             evidence.append(String(
                 format: spanish ? "Temperatura medida: %.1f °C" : "Measured temperature: %.1f °C",
@@ -665,6 +718,7 @@ public enum BatteryInsightEngine {
             ))
             if temperature >= 50 {
                 severity = .critical
+                hasImmediateCriticalSignal = true
                 recommendations.append(spanish ? "Reduce la carga y deja enfriar el Mac." : "Reduce the load and let the Mac cool down.")
             } else if temperature >= 40 {
                 severity = maxSeverity(severity, .warning)
@@ -689,6 +743,7 @@ public enum BatteryInsightEngine {
             evidence.append(spanish ? "Estado térmico: serio" : "Thermal state: serious")
         case .critical:
             severity = .critical
+            hasImmediateCriticalSignal = true
             evidence.append(spanish ? "Estado térmico: crítico" : "Thermal state: critical")
         default:
             break
@@ -720,11 +775,25 @@ public enum BatteryInsightEngine {
         let summary: String
         switch severity {
         case .critical:
-            title = spanish ? "Atención inmediata" : "Immediate attention"
-            summary = spanish ? "Hay una señal crítica medida por Cellium. Revisa los datos antes de continuar con una carga intensa." : "Cellium measured a critical signal. Review the data before continuing with a heavy workload."
+            if hasHighCyclePace && !hasImmediateCriticalSignal {
+                title = spanish ? "Ritmo de ciclos alto" : "High cycle pace"
+                summary = spanish
+                    ? "Cellium midió un uso de batería alto en la ventana reciente. Esto no demuestra daño, pero sí merece ajustar el ritmo si quieres conservar ciclos."
+                    : "Cellium measured high battery use in the recent window. This does not prove damage, but the pace is worth adjusting if you want to preserve cycles."
+            } else {
+                title = spanish ? "Atención inmediata" : "Immediate attention"
+                summary = spanish ? "Hay una señal crítica medida por Cellium. Revisa los datos antes de continuar con una carga intensa." : "Cellium measured a critical signal. Review the data before continuing with a heavy workload."
+            }
         case .warning:
-            title = spanish ? "Revisión recomendada" : "Review recommended"
-            summary = spanish ? "Hay señales que merecen revisión, pero no prueban por sí solas un daño de batería." : "Some signals deserve review, but they do not prove battery damage by themselves."
+            if hasElevatedCyclePace {
+                title = spanish ? "Uso de batería elevado" : "Elevated battery use"
+                summary = spanish
+                    ? "El ritmo reciente está por encima del guardrail o de tu contexto habitual, sin indicar por sí solo daño de batería."
+                    : "Recent use is above the guardrail or your usual context, without indicating battery damage by itself."
+            } else {
+                title = spanish ? "Revisión recomendada" : "Review recommended"
+                summary = spanish ? "Hay señales que merecen revisión, pero no prueban por sí solas un daño de batería." : "Some signals deserve review, but they do not prove battery damage by themselves."
+            }
         case .info:
             title = spanish ? "Batería estable" : "Battery looks stable"
             summary = spanish ? "Las mediciones actuales no muestran una señal importante fuera de tu contexto observado." : "Current measurements do not show an important signal outside the observed context."

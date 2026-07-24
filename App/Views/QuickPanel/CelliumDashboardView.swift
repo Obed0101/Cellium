@@ -35,6 +35,7 @@ enum DashboardStatus: Equatable {
     case protected
     case charging
     case connectedNotCharging
+    case elevated
     case attention
 }
 
@@ -867,6 +868,7 @@ struct CelliumDashboardView: View {
             primaryReadout
             weatherStrip
             insight
+            cycleUsage
             intelligenceCard
             metrics
             systemMetrics
@@ -1088,8 +1090,10 @@ struct CelliumDashboardView: View {
         switch severity {
         case .info:
             return CelliumBrand.signal
-        case .warning, .critical:
+        case .warning:
             return CelliumBrand.warning
+        case .critical:
+            return CelliumBrand.critical
         }
     }
 
@@ -1273,11 +1277,19 @@ struct CelliumDashboardView: View {
 
     @ViewBuilder
     private var insight: some View {
-        if model.statusKind == .attention || model.statusKind == .connectedNotCharging {
+        if model.statusKind == .attention
+            || model.statusKind == .elevated
+            || model.statusKind == .connectedNotCharging {
+            let isCritical = model.statusKind == .attention
+            let isElevated = model.statusKind == .elevated
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: model.statusKind == .attention ? "exclamationmark.triangle.fill" : "powerplug.fill")
+                Image(systemName: isCritical
+                    ? "exclamationmark.octagon.fill"
+                    : (isElevated ? "exclamationmark.triangle.fill" : "powerplug.fill"))
                     .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(model.statusKind == .attention ? CelliumBrand.warning : CelliumBrand.accentStrong)
+                    .foregroundStyle(isCritical
+                        ? CelliumBrand.critical
+                        : (isElevated ? CelliumBrand.warning : CelliumBrand.accentStrong))
                 Text(model.statusExplanation)
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(CelliumBrand.foreground)
@@ -1290,6 +1302,185 @@ struct CelliumDashboardView: View {
                     .stroke(CelliumBrand.border, lineWidth: 1)
             }
             .padding(.top, 12)
+        }
+    }
+
+    @ViewBuilder
+    private var cycleUsage: some View {
+        if let summary = model.cycleUsageSummary, model.cyclePlanConfiguration.enabled {
+            let color = cycleStatusColor(summary.status)
+            let maximum = max(120, ceil(summary.todayUsagePercent / 100) * 100)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Label(
+                        model.language == .spanish ? "Uso de batería" : "Battery use",
+                        systemImage: "gauge.with.dots.needle.67percent"
+                    )
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    Spacer()
+                    Text(cycleStatusLabel(summary.status))
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .foregroundStyle(color)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(color.opacity(0.14), in: Capsule())
+                }
+
+                HStack(alignment: .lastTextBaseline, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(String(format: "%.0f%%", summary.todayUsagePercent))
+                            .font(.system(size: 28, weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(color)
+                        Text(String(
+                            format: model.language == .spanish ? "%.2f EFC hoy" : "%.2f EFC today",
+                            summary.todayEquivalentCycles
+                        ))
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .foregroundStyle(CelliumBrand.muted)
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(summary.currentCycleCount.map { "\($0)" } ?? "—")
+                            .font(.system(size: 18, weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                        Text(model.language == .spanish
+                            ? "ciclos · +\(summary.todayHardwareCycleDelta) hoy"
+                            : "cycles · +\(summary.todayHardwareCycleDelta) today")
+                            .font(.system(size: 9, weight: .medium, design: .rounded))
+                            .foregroundStyle(CelliumBrand.muted)
+                    }
+                }
+
+                GeometryReader { geometry in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(CelliumBrand.border.opacity(0.8))
+                        Capsule()
+                            .fill(color)
+                            .frame(width: geometry.size.width * min(1, summary.todayUsagePercent / maximum))
+                        Rectangle()
+                            .fill(CelliumBrand.foreground.opacity(0.65))
+                            .frame(width: 1, height: 12)
+                            .offset(x: geometry.size.width * 100 / maximum)
+                    }
+                }
+                .frame(height: 8)
+
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(cycleComparisonLabel(summary))
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .foregroundStyle(CelliumBrand.muted)
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text(cycleWeekLabel(summary))
+                        Text(cycleConfidenceLabel(summary.confidence))
+                    }
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundStyle(CelliumBrand.muted)
+                }
+
+                if let budget = summary.weeklyBudget, budget > 0 {
+                    GeometryReader { geometry in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(CelliumBrand.border.opacity(0.65))
+                            Capsule()
+                                .fill(color.opacity(0.85))
+                                .frame(width: geometry.size.width * min(1, summary.weekEquivalentCycles / budget))
+                            if let projected = summary.projectedWeekEquivalentCycles {
+                                Rectangle()
+                                    .fill(projected > budget ? CelliumBrand.critical : CelliumBrand.foreground.opacity(0.65))
+                                    .frame(width: 1, height: 8)
+                                    .offset(x: geometry.size.width * min(1, projected / budget))
+                            }
+                        }
+                    }
+                    .frame(height: 5)
+                    .accessibilityLabel(model.language == .spanish
+                        ? "Progreso semanal del presupuesto de ciclos"
+                        : "Weekly cycle budget progress")
+                }
+            }
+            .padding(12)
+            .background(CelliumBrand.surface, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .stroke(color.opacity(0.45), lineWidth: 1)
+            }
+            .padding(.top, 12)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                model.language == .spanish
+                    ? String(format: "Uso de batería %.0f por ciento, %.2f ciclos equivalentes, más %d ciclos hoy", summary.todayUsagePercent, summary.todayEquivalentCycles, summary.todayHardwareCycleDelta)
+                    : String(format: "Battery use %.0f percent, %.2f equivalent cycles, plus %d cycles today", summary.todayUsagePercent, summary.todayEquivalentCycles, summary.todayHardwareCycleDelta)
+            )
+        }
+    }
+
+    private func cycleStatusColor(_ status: CyclePaceStatus) -> Color {
+        switch status {
+        case .high: return CelliumBrand.critical
+        case .elevated: return CelliumBrand.warning
+        case .onTrack: return CelliumBrand.signal
+        case .insufficientData: return CelliumBrand.muted
+        }
+    }
+
+    private func cycleStatusLabel(_ status: CyclePaceStatus) -> String {
+        switch (status, model.language) {
+        case (.high, .spanish): return "ALTO"
+        case (.elevated, .spanish): return "ELEVADO"
+        case (.onTrack, .spanish): return "EN RITMO"
+        case (.insufficientData, .spanish): return "APRENDIENDO"
+        case (.high, .english): return "HIGH"
+        case (.elevated, .english): return "ELEVATED"
+        case (.onTrack, .english): return "ON TRACK"
+        case (.insufficientData, .english): return "LEARNING"
+        }
+    }
+
+    private func cycleComparisonLabel(_ summary: CycleUsageSummary) -> String {
+        switch (summary.comparison, model.language) {
+        case (.lower, .spanish): return "Menor que lo habitual a esta hora"
+        case (.usual, .spanish): return "Dentro de lo habitual a esta hora"
+        case (.higher, .spanish): return "Mayor que lo habitual a esta hora"
+        case (.insufficientData, .spanish): return "Baseline: \(summary.baselineDayCount)/3 días"
+        case (.lower, .english): return "Lower than usual at this time"
+        case (.usual, .english): return "Within the usual range at this time"
+        case (.higher, .english): return "Higher than usual at this time"
+        case (.insufficientData, .english): return "Baseline: \(summary.baselineDayCount)/3 days"
+        }
+    }
+
+    private func cycleWeekLabel(_ summary: CycleUsageSummary) -> String {
+        if let budget = summary.weeklyBudget {
+            if let projected = summary.projectedWeekEquivalentCycles {
+                return String(
+                    format: model.language == .spanish
+                        ? "%.2f / %.1f · proy. %.1f EFC"
+                        : "%.2f / %.1f · proj. %.1f EFC",
+                    summary.weekEquivalentCycles,
+                    budget,
+                    projected
+                )
+            }
+            return String(format: "%.2f / %.1f EFC", summary.weekEquivalentCycles, budget)
+        }
+        if let projected = summary.projectedWeekEquivalentCycles {
+            return String(format: model.language == .spanish ? "semana ~%.1f EFC" : "week ~%.1f EFC", projected)
+        }
+        return String(format: model.language == .spanish ? "semana %.2f EFC" : "week %.2f EFC", summary.weekEquivalentCycles)
+    }
+
+    private func cycleConfidenceLabel(_ confidence: CycleUsageConfidence) -> String {
+        switch (confidence, model.language) {
+        case (.unavailable, .spanish): return "confianza no disponible"
+        case (.low, .spanish): return "confianza baja"
+        case (.medium, .spanish): return "confianza media"
+        case (.high, .spanish): return "confianza alta"
+        case (.unavailable, .english): return "confidence unavailable"
+        case (.low, .english): return "low confidence"
+        case (.medium, .english): return "medium confidence"
+        case (.high, .english): return "high confidence"
         }
     }
 
@@ -1313,7 +1504,9 @@ struct CelliumDashboardView: View {
                 value: model.battery.cycleCount.map(String.init) ?? "—",
                 label: model.copy(.cycles),
                 qualitySymbol: model.battery.cycleCount == nil ? "questionmark.circle" : "checkmark.circle",
-                qualityLabel: model.battery.cycleCount == nil ? model.copy(.unavailable) : model.copy(.measured)
+                qualityLabel: model.battery.cycleCount == nil
+                    ? model.copy(.unavailable)
+                    : "\(model.copy(.measured)) · +\(model.cycleUsageSummary?.todayHardwareCycleDelta ?? 0) \(model.language == .spanish ? "hoy" : "today")"
             )
         }
         .padding(.vertical, 9)
@@ -1988,7 +2181,7 @@ struct CelliumDashboardView: View {
              }
              .animation(.easeInOut(duration: 0.22), value: model.samplingPreference)
 
-             SettingsSection(title: model.copy(.learning)) {
+              SettingsSection(title: model.copy(.learning)) {
                 SettingsRow(
                     title: model.copy(.learningToggle),
                     detail: model.copy(.learningToggleDetail)
@@ -2000,8 +2193,119 @@ struct CelliumDashboardView: View {
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .accessibilityLabel(model.copy(.learningToggle))
-                 }
+                  }
+                }
+
+               SettingsSection(title: model.language == .spanish ? "Battery Plan" : "Battery Plan") {
+                   SettingsRow(
+                       title: model.language == .spanish ? "Seguimiento de ciclos" : "Cycle tracking",
+                       detail: model.language == .spanish
+                           ? "Mide EFC, cambios reales y ritmo diario sin confundirlos con salud."
+                           : "Tracks EFC, measured changes, and daily pace without confusing them with health."
+                   ) {
+                       Toggle("", isOn: Binding(
+                           get: { model.cyclePlanConfiguration.enabled },
+                           set: { model.setCyclePlanEnabled($0) }
+                       ))
+                       .labelsHidden()
+                       .toggleStyle(.switch)
+                   }
+
+                   if model.cyclePlanConfiguration.enabled {
+                       SettingsRow(
+                           title: model.language == .spanish ? "Tipo de plan" : "Plan type",
+                           detail: model.language == .spanish
+                               ? "Automático, presupuesto semanal u objetivo por fecha."
+                               : "Automatic, weekly budget, or target date."
+                       ) {
+                           Picker("", selection: Binding(
+                               get: { model.cyclePlanConfiguration.mode },
+                               set: { model.setCyclePlanMode($0) }
+                           )) {
+                               Text(model.language == .spanish ? "Automático" : "Automatic").tag(CyclePlanMode.automatic)
+                               Text(model.language == .spanish ? "Semanal" : "Weekly").tag(CyclePlanMode.weeklyBudget)
+                               Text(model.language == .spanish ? "Por fecha" : "By date").tag(CyclePlanMode.targetDate)
+                           }
+                           .labelsHidden()
+                           .pickerStyle(.menu)
+                       }
+
+                       if model.cyclePlanConfiguration.mode == .weeklyBudget {
+                           ThresholdRow(
+                               title: model.language == .spanish ? "Presupuesto semanal" : "Weekly budget",
+                               value: String(format: "%.1f EFC", model.cyclePlanConfiguration.weeklyEquivalentCycleBudget),
+                               slider: Binding(
+                                   get: { model.cyclePlanConfiguration.weeklyEquivalentCycleBudget },
+                                   set: { model.setCycleWeeklyBudget($0) }
+                               ),
+                               range: 0.5...21
+                           )
+                       }
+
+                       if model.cyclePlanConfiguration.mode == .targetDate {
+                           SettingsRow(
+                               title: model.language == .spanish ? "Fecha objetivo" : "Target date",
+                               detail: model.language == .spanish
+                                   ? "Cellium calcula el presupuesto semanal restante."
+                                   : "Cellium calculates the remaining weekly budget."
+                           ) {
+                               DatePicker(
+                                   "",
+                                   selection: Binding(
+                                       get: {
+                                           model.cyclePlanConfiguration.targetDate
+                                               ?? Calendar.autoupdatingCurrent.date(byAdding: .year, value: 1, to: Date())!
+                                       },
+                                       set: { model.setCycleTargetDate($0) }
+                                   ),
+                                   in: Date()...,
+                                   displayedComponents: .date
+                               )
+                               .labelsHidden()
+                               .controlSize(.small)
+                           }
+                           SettingsRow(
+                               title: model.language == .spanish ? "Máximo de ciclos" : "Maximum cycles",
+                               detail: model.language == .spanish
+                                   ? "Meta de contador para esa fecha."
+                                   : "Hardware counter target for that date."
+                           ) {
+                               Stepper(
+                                   value: Binding(
+                                       get: {
+                                           model.cyclePlanConfiguration.targetCycleCount
+                                               ?? (model.battery.cycleCount ?? 0) + 100
+                                       },
+                                       set: { model.setCycleTargetCount($0) }
+                                   ),
+                                   in: (model.battery.cycleCount ?? 0)...max(5_000, (model.battery.cycleCount ?? 0) + 1)
+                               ) {
+                                   Text("\(model.cyclePlanConfiguration.targetCycleCount ?? (model.battery.cycleCount ?? 0) + 100)")
+                                       .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                               }
+                           }
+                       }
+
+                       SettingsRow(
+                           title: model.language == .spanish ? "Avisos de ritmo" : "Pace alerts",
+                           detail: model.language == .spanish
+                               ? "Ámbar desde 1 EFC; rojo desde 2 EFC o +2 ciclos en 24 h."
+                               : "Amber from 1 EFC; red from 2 EFC or +2 cycles in 24h."
+                       ) {
+                           Toggle("", isOn: Binding(
+                               get: { model.cyclePlanConfiguration.alertsEnabled },
+                               set: { model.setCycleAlertsEnabled($0) }
+                           ))
+                           .labelsHidden()
+                           .toggleStyle(.switch)
+                       }
+
+                       SettingsInfoRow(text: model.language == .spanish
+                           ? "Los EFC son una estimación local por amperaje/capacidad. El contador de ciclos sigue siendo la medición de macOS."
+                           : "EFC is a local current/capacity estimate. The cycle counter remains the macOS measurement.")
+                   }
                }
+               .animation(.easeInOut(duration: 0.22), value: model.cyclePlanConfiguration.mode)
                }
 
                if selectedSettingsCategory == .general {

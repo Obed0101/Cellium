@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import Charts
 import AppKit
+import CelliumCore
 import CelliumStore
 
 struct BatteryHistoryPage: View {
@@ -10,6 +11,15 @@ struct BatteryHistoryPage: View {
      @State private var hoveredHistoryX: CGFloat = 0
      @State private var hoveredLearningDate: Date?
      @State private var hoveredLearningX: CGFloat = 0
+
+     private struct CycleHistoryPoint: Identifiable {
+         let date: Date
+         let usagePercent: Double
+         let hardwareCycleDelta: Int
+         let quality: SensorQuality
+
+         var id: Date { date }
+     }
 
 
     private var processSummaries: [ProcessHistorySummary] {
@@ -45,6 +55,7 @@ struct BatteryHistoryPage: View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
                 hourlySection
+                cycleUsageSection
                 dayNightSection
                 weeklyLearningSection
                 processSection
@@ -193,6 +204,241 @@ struct BatteryHistoryPage: View {
                 value: temperatures.isEmpty ? "—" : String(format: "%.1f °C", temperatures.reduce(0, +) / Double(temperatures.count))
             )
         }
+    }
+
+    private var cycleUsageSection: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            sectionTitle(
+                model.language == .spanish ? "Uso equivalente y ciclos" : "Equivalent use and cycles",
+                subtitle: model.language == .spanish
+                    ? "EFC estimados; el contador de hardware permanece medido por macOS"
+                    : "Estimated EFC; the hardware counter remains measured by macOS"
+            )
+
+            if cycleHistoryPoints.isEmpty {
+                emptyState(text: model.language == .spanish
+                    ? "Aún no hay historial de ciclos equivalente."
+                    : "Equivalent cycle history is not available yet.")
+            } else {
+                Chart {
+                    RuleMark(y: .value("100%", 100))
+                        .foregroundStyle(CelliumBrand.foreground.opacity(0.45))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                        .annotation(position: .top, alignment: .trailing) {
+                            Text("100% · 1 EFC")
+                                .font(.system(size: 8, weight: .medium, design: .monospaced))
+                                .foregroundStyle(CelliumBrand.muted)
+                        }
+
+                    ForEach(cycleHistoryPoints) { point in
+                        if usesIntradayCycleHistory {
+                            BarMark(
+                                x: .value(model.copy(.chartTime), point.date),
+                                y: .value("EFC", point.usagePercent)
+                            )
+                            .foregroundStyle(cyclePointColor(point))
+                            .cornerRadius(2)
+                        } else {
+                            BarMark(
+                                x: .value(model.copy(.chartTime), point.date, unit: .day),
+                                y: .value("EFC", point.usagePercent)
+                            )
+                            .foregroundStyle(cyclePointColor(point))
+                            .cornerRadius(3)
+                        }
+                    }
+                }
+                .chartYScale(domain: 0...cycleHistoryMaximum)
+                .chartXAxis { AxisMarks(values: .automatic(desiredCount: 5)) }
+                .chartYAxis {
+                    AxisMarks(position: .leading) { value in
+                        AxisGridLine().foregroundStyle(CelliumBrand.border.opacity(0.6))
+                        AxisValueLabel {
+                            if let percent = value.as(Double.self) {
+                                Text("\(Int(percent))%")
+                            }
+                        }
+                    }
+                }
+                .frame(height: 155)
+                .padding(8)
+                .background(CelliumBrand.surface, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                .accessibilityLabel(model.language == .spanish
+                    ? "Historial de uso equivalente de batería"
+                    : "Equivalent battery use history")
+
+                if let summary = model.cycleUsageSummary {
+                    HStack(spacing: 8) {
+                        statPill(
+                            title: model.language == .spanish ? "Hoy" : "Today",
+                            value: String(format: "%.0f%%", summary.todayUsagePercent)
+                        )
+                        statPill(
+                            title: "24 h",
+                            value: String(format: "%.2f EFC", summary.rolling24HourEquivalentCycles)
+                        )
+                        statPill(
+                            title: model.language == .spanish ? "Ciclos" : "Cycles",
+                            value: "+\(summary.rolling24HourHardwareCycleDelta)"
+                        )
+                    }
+
+                    HStack(spacing: 12) {
+                        Label(
+                            cycleQualityLabel(cycleHistoryPoints.last?.quality ?? .unavailable),
+                            systemImage: "waveform.path.ecg"
+                        )
+                        Label(
+                            model.language == .spanish
+                                ? "Observado \(durationLabel(summary.observedSecondsToday))"
+                                : "Observed \(durationLabel(summary.observedSecondsToday))",
+                            systemImage: "clock"
+                        )
+                        if summary.gapSecondsToday > 0 {
+                            Label(
+                                model.language == .spanish
+                                    ? "Huecos \(durationLabel(summary.gapSecondsToday))"
+                                    : "Gaps \(durationLabel(summary.gapSecondsToday))",
+                                systemImage: "exclamationmark.triangle"
+                            )
+                            .foregroundStyle(CelliumBrand.warning)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .font(.system(size: 8, weight: .medium, design: .rounded))
+                    .foregroundStyle(CelliumBrand.muted)
+                }
+
+                ForEach(Array(cycleDetailDays.reversed()), id: \.bucketStart) { bucket in
+                    HStack(spacing: 8) {
+                        Text(bucket.bucketStart, format: .dateTime.day().month(.abbreviated))
+                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                        Text(cycleCountRange(bucket))
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .foregroundStyle(
+                                bucket.hardwareCycleDelta >= 2
+                                    ? CelliumBrand.critical
+                                    : (bucket.cycleResetCount > 0 ? CelliumBrand.warning : CelliumBrand.muted)
+                            )
+                        Spacer()
+                        Text(String(format: "%.0f%% · %.2f EFC", bucket.usagePercent, bucket.equivalentCycles))
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .foregroundStyle(cyclePointColor(
+                                CycleHistoryPoint(
+                                    date: bucket.bucketStart,
+                                    usagePercent: bucket.usagePercent,
+                                    hardwareCycleDelta: bucket.hardwareCycleDelta,
+                                    quality: bucket.quality
+                                )
+                            ))
+                    }
+                    .padding(.horizontal, 4)
+                }
+            }
+        }
+    }
+
+    private var usesIntradayCycleHistory: Bool {
+        guard let duration = model.historyRange.duration else { return false }
+        return duration <= 3 * 86_400
+    }
+
+    private var filteredCycleDays: [StoredCycleUsageBucket] {
+        let since = model.historyRange.since
+        return model.cycleUsageDailyBuckets.filter { bucket in
+            since.map { bucket.bucketStart >= Calendar.autoupdatingCurrent.startOfDay(for: $0) } ?? true
+        }
+    }
+
+    private var cycleDetailDays: [StoredCycleUsageBucket] {
+        guard filteredCycleDays.count > 31, let first = filteredCycleDays.first else {
+            return filteredCycleDays
+        }
+        return [first] + filteredCycleDays.dropFirst().filter {
+            $0.hardwareCycleDelta > 0 || $0.cycleResetCount > 0
+        }
+    }
+
+    private var cycleHistoryPoints: [CycleHistoryPoint] {
+        if !usesIntradayCycleHistory {
+            return filteredCycleDays.map {
+                CycleHistoryPoint(
+                    date: $0.bucketStart,
+                    usagePercent: $0.usagePercent,
+                    hardwareCycleDelta: $0.hardwareCycleDelta,
+                    quality: $0.quality
+                )
+            }
+        }
+
+        let since = model.historyRange.since ?? .distantPast
+        let buckets = model.cycleUsageQuarterHourBuckets
+            .filter { $0.bucketStart >= since }
+            .sorted { $0.bucketStart < $1.bucketStart }
+        var currentDay: Date?
+        var cumulative = 0.0
+        var cycleDelta = 0
+        return buckets.map { bucket in
+            let day = Calendar.autoupdatingCurrent.startOfDay(for: bucket.bucketStart)
+            if currentDay != day {
+                currentDay = day
+                cumulative = 0
+                cycleDelta = 0
+            }
+            cumulative += bucket.equivalentCycles
+            cycleDelta += bucket.hardwareCycleDelta
+            return CycleHistoryPoint(
+                date: bucket.bucketStart,
+                usagePercent: cumulative * 100,
+                hardwareCycleDelta: cycleDelta,
+                quality: bucket.quality
+            )
+        }
+    }
+
+    private var cycleHistoryMaximum: Double {
+        let maximum = cycleHistoryPoints.map(\.usagePercent).max() ?? 100
+        return max(120, ceil(maximum / 100) * 100)
+    }
+
+    private func cyclePointColor(_ point: CycleHistoryPoint) -> Color {
+        if point.hardwareCycleDelta >= 2 || point.usagePercent >= 200 {
+            return CelliumBrand.critical
+        }
+        if point.usagePercent >= 100 {
+            return CelliumBrand.warning
+        }
+        return CelliumBrand.signal
+    }
+
+    private func cycleCountRange(_ bucket: StoredCycleUsageBucket) -> String {
+        if bucket.cycleResetCount > 0 {
+            let count = bucket.lastCycleCount.map(String.init) ?? "—"
+            return model.language == .spanish ? "\(count) · cambio" : "\(count) · changed"
+        }
+        if let first = bucket.firstCycleCount, let last = bucket.lastCycleCount {
+            return first == last ? "\(last) · +\(bucket.hardwareCycleDelta)" : "\(first)→\(last)"
+        }
+        return "+\(bucket.hardwareCycleDelta)"
+    }
+
+    private func cycleQualityLabel(_ quality: SensorQuality) -> String {
+        switch quality {
+        case .measured: return model.language == .spanish ? "Amperaje medido" : "Measured current"
+        case .calculated: return model.language == .spanish ? "Amperaje calculado" : "Calculated current"
+        case .estimated: return model.language == .spanish ? "Uso estimado" : "Estimated use"
+        case .stale: return model.language == .spanish ? "Dato desactualizado" : "Stale data"
+        case .rejected: return model.language == .spanish ? "Dato rechazado" : "Rejected data"
+        case .unavailable: return model.language == .spanish ? "Calidad no disponible" : "Quality unavailable"
+        }
+    }
+
+    private func durationLabel(_ seconds: TimeInterval) -> String {
+        let minutes = Int(max(0, seconds) / 60)
+        if minutes >= 60 {
+            return String(format: "%dh %02dm", minutes / 60, minutes % 60)
+        }
+        return "\(minutes)m"
     }
 
      private var computerUseSubtitle: String {
@@ -1499,6 +1745,17 @@ struct BatteryAlertsPage: View {
                 model.copy(.alertMemoryTitle),
                 String(format: model.copy(.memoryAlert), memory)
             )
+        case "cycle-pace-high", "cycle-pace-elevated":
+            let efc = event.measurements["rolling24HourEFC"] ?? 0
+            let hardware = Int(event.measurements["hardwareCycleDelta24h"] ?? 0)
+            return (
+                model.language == .spanish
+                    ? (event.identifier == "cycle-pace-high" ? "Ritmo de ciclos alto" : "Uso de batería elevado")
+                    : (event.identifier == "cycle-pace-high" ? "High cycle pace" : "Elevated battery use"),
+                model.language == .spanish
+                    ? String(format: "%.2f EFC y +%d ciclos medidos en 24 h. Uso alto no significa daño confirmado.", efc, hardware)
+                    : String(format: "%.2f EFC and +%d measured cycles in 24h. High use does not mean confirmed damage.", efc, hardware)
+            )
         default:
             if event.identifier.hasPrefix("memory:") {
                 let memory = memoryDescription(for: event.measurements)
@@ -1557,6 +1814,20 @@ struct BatteryAlertsPage: View {
                 label = identifier == "discharge"
                     ? model.copy(.alertMeasurementDischarge)
                     : model.copy(.alertMeasurementEnergy)
+            case "todayEFC":
+                label = model.language == .spanish ? "EFC hoy" : "Today EFC"
+            case "rolling24HourEFC":
+                label = "EFC 24 h"
+            case "todayUsagePercent":
+                label = model.language == .spanish ? "Uso hoy" : "Use today"
+            case "hardwareCycleDelta24h":
+                label = model.language == .spanish ? "Ciclos 24 h" : "Cycles 24h"
+            case "weeklyEFC":
+                label = model.language == .spanish ? "EFC semana" : "Week EFC"
+            case "projectedWeekEFC":
+                label = model.language == .spanish ? "Proyección" : "Projection"
+            case "weeklyBudgetEFC":
+                label = model.language == .spanish ? "Presupuesto" : "Budget"
             default:
                 return nil
             }
@@ -1574,8 +1845,12 @@ struct BatteryAlertsPage: View {
             return ByteCountFormatter.string(fromByteCount: Int64(value), countStyle: .memory)
         case "percentPerMinute":
             return String(format: "~%.2f%%/min", value)
-        case "cpuPercent", "memoryPercent":
+        case "cpuPercent", "memoryPercent", "todayUsagePercent":
             return String(format: "%.0f%%", value)
+        case "hardwareCycleDelta24h":
+            return "+\(Int(value))"
+        case "todayEFC", "rolling24HourEFC", "weeklyEFC", "projectedWeekEFC", "weeklyBudgetEFC":
+            return String(format: "%.2f EFC", value)
         default:
             return String(format: "%.1f", value)
         }
@@ -1592,7 +1867,8 @@ struct BatteryAlertsPage: View {
     private func color(for severity: AlertSeverity) -> Color {
         switch severity {
         case .info: return CelliumBrand.signal
-        case .warning, .critical: return CelliumBrand.warning
+        case .warning: return CelliumBrand.warning
+        case .critical: return CelliumBrand.critical
         }
     }
 }

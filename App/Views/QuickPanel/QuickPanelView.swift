@@ -199,6 +199,10 @@ final class BatteryViewModel: ObservableObject {
      @Published private(set) var computerUseDate: Date = Calendar.autoupdatingCurrent.startOfDay(for: Date())
      @Published private(set) var learningAggregates: [BatteryAggregate] = []
      @Published private(set) var learningHourlyAggregates: [BatteryAggregate] = []
+     @Published private(set) var cycleUsageQuarterHourBuckets: [StoredCycleUsageBucket] = []
+     @Published private(set) var cycleUsageDailyBuckets: [StoredCycleUsageBucket] = []
+     @Published private(set) var cycleUsageSummary: CycleUsageSummary?
+     @Published private(set) var cyclePlanConfiguration = CyclePlanConfiguration()
 
     @Published private(set) var historyRange: HistoryRange = .day {
         didSet { cachedHistoryLabels = nil }
@@ -298,6 +302,7 @@ final class BatteryViewModel: ObservableObject {
     private let coordinator: SamplingCoordinator
     private let store: SQLiteStore?
     private let weatherCoordinator: WeatherCoordinator
+    private let cycleBudgetCoordinator = CycleBudgetCoordinator()
     private let processMonitor = ProcessEnergyMonitor()
     private let updateChecker = GitHubUpdateChecker()
     private let intelligenceService = BatteryIntelligenceService()
@@ -337,6 +342,7 @@ final class BatteryViewModel: ObservableObject {
         self.defaults = .standard
         self.batteryReader = batteryReader
         self.systemReader = systemReader
+        self.cyclePlanConfiguration = Self.loadCyclePlanConfiguration(from: .standard)
         let initialLanguage = CelliumLanguage(rawValue: defaults.string(forKey: "cellium.language") ?? "") ?? .english
         self.language = initialLanguage
         let historyRangeMigrationKey = "cellium.historyRange.default24h.migrated"
@@ -417,6 +423,19 @@ final class BatteryViewModel: ObservableObject {
         let decoder = JSONDecoder()
         guard let messages = try? decoder.decode([AgentChatMessage].self, from: data) else { return [] }
         return Array(messages.suffix(100))
+    }
+
+    private static func loadCyclePlanConfiguration(from defaults: UserDefaults) -> CyclePlanConfiguration {
+        guard let data = defaults.data(forKey: "cellium.cyclePlan.configuration"),
+              let configuration = try? JSONDecoder().decode(CyclePlanConfiguration.self, from: data) else {
+            return CyclePlanConfiguration()
+        }
+        return configuration
+    }
+
+    private func persistCyclePlanConfiguration() {
+        guard let data = try? JSONEncoder().encode(cyclePlanConfiguration) else { return }
+        defaults.set(data, forKey: "cellium.cyclePlan.configuration")
     }
 
     private static func loadIntelligenceSessions(
@@ -872,6 +891,12 @@ final class BatteryViewModel: ObservableObject {
         if let disk = system.diskUsedPercent, disk >= 95 {
             return .attention
         }
+        if cycleUsageSummary?.status == .high {
+            return .attention
+        }
+        if cycleUsageSummary?.status == .elevated {
+            return .elevated
+        }
         if isChargeLimitActive {
             return .connectedNotCharging
         }
@@ -898,6 +923,8 @@ final class BatteryViewModel: ObservableObject {
                 return String(format: copy(.chargeLimitActive), limit)
             }
             return copy(.connectedNotCharging)
+        case .elevated:
+            return language == .spanish ? "Uso elevado" : "Elevated use"
         case .attention:
             return copy(.attention)
         }
@@ -927,6 +954,30 @@ final class BatteryViewModel: ObservableObject {
         }
         if let disk = system.diskUsedPercent, disk >= 95 {
             return String(format: copy(.diskAlert), disk)
+        }
+        if let cycleUsageSummary, cycleUsageSummary.status == .high {
+            return language == .spanish
+                ? String(
+                    format: "Uso alto: %.2f ciclos equivalentes y +%d ciclos medidos en las últimas 24 h. Esto indica ritmo alto, no daño confirmado.",
+                    cycleUsageSummary.rolling24HourEquivalentCycles,
+                    cycleUsageSummary.rolling24HourHardwareCycleDelta
+                )
+                : String(
+                    format: "High use: %.2f equivalent cycles and +%d measured cycles in the last 24h. This indicates a high pace, not confirmed damage.",
+                    cycleUsageSummary.rolling24HourEquivalentCycles,
+                    cycleUsageSummary.rolling24HourHardwareCycleDelta
+                )
+        }
+        if let cycleUsageSummary, cycleUsageSummary.status == .elevated {
+            return language == .spanish
+                ? String(
+                    format: "Uso elevado: %.0f%% de una carga completa equivalente hoy. Revisa el ritmo y la proyección semanal.",
+                    cycleUsageSummary.todayUsagePercent
+                )
+                : String(
+                    format: "Elevated use: %.0f%% of a full-capacity equivalent today. Review the pace and weekly projection.",
+                    cycleUsageSummary.todayUsagePercent
+                )
         }
         if battery.externalPowerConnected,
            isChargeLimitActive,
@@ -1132,6 +1183,9 @@ final class BatteryViewModel: ObservableObject {
                 hourlyAggregates = []
                  learningAggregates = []
                  learningHourlyAggregates = []
+                 cycleUsageQuarterHourBuckets = []
+                 cycleUsageDailyBuckets = []
+                 cycleUsageSummary = nil
                  processImpacts = []
 
                 storeDiagnostics = nil
@@ -1149,6 +1203,7 @@ final class BatteryViewModel: ObservableObject {
             if includeSupportingData {
                 try? await coordinator.flush()
                 _ = try? await store.applyRetentionIfNeeded()
+                try await refreshCycleBudget(from: store, now: Date())
                 guard isCurrentRequest() else { return }
             }
 
@@ -1280,6 +1335,9 @@ final class BatteryViewModel: ObservableObject {
                 hourlyAggregates = []
                  learningAggregates = []
                  learningHourlyAggregates = []
+                 cycleUsageQuarterHourBuckets = []
+                 cycleUsageDailyBuckets = []
+                 cycleUsageSummary = nil
                  processImpacts = []
 
                 storeDiagnostics = nil
@@ -1294,6 +1352,24 @@ final class BatteryViewModel: ObservableObject {
             } else {
                 self.storeError = String(describing: error)
             }
+        }
+    }
+
+    private func refreshCycleBudget(from store: SQLiteStore, now: Date) async throws {
+        let snapshot = try await cycleBudgetCoordinator.load(
+            from: store,
+            currentCycleCount: battery.cycleCount,
+            configuration: cyclePlanConfiguration,
+            now: now
+        )
+        if cycleUsageQuarterHourBuckets != snapshot.quarterHourBuckets {
+            cycleUsageQuarterHourBuckets = snapshot.quarterHourBuckets
+        }
+        if cycleUsageDailyBuckets != snapshot.dailyBuckets {
+            cycleUsageDailyBuckets = snapshot.dailyBuckets
+        }
+        if cycleUsageSummary != snapshot.summary {
+            cycleUsageSummary = snapshot.summary
         }
     }
 
@@ -1854,10 +1930,10 @@ final class BatteryViewModel: ObservableObject {
 
      private func publishIntelligenceActionIfNeeded(_ result: IntelligenceAnalysisResult) {
          guard result.actionRequired,
-               let action = result.actionMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !action.isEmpty,
-               learningDaysObserved >= 7,
-               wifiAvailable else {
+                let action = result.actionMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+                !action.isEmpty,
+                learningDaysObserved >= 7 || cycleUsageSummary?.isActionableHighPace == true,
+                wifiAvailable else {
              return
          }
 
@@ -1941,12 +2017,20 @@ final class BatteryViewModel: ObservableObject {
             languageCode: language.rawValue
         )
         localIntelligenceInsight = insight
-        if !intelligenceConfiguration.enabled || intelligenceInsight?.provider == nil {
+        let deterministicCycleSignal = cycleUsageSummary?.status == .elevated
+            || cycleUsageSummary?.status == .high
+        if deterministicCycleSignal
+            || !intelligenceConfiguration.enabled
+            || intelligenceInsight?.provider == nil {
             intelligenceInsight = insight
         }
     }
 
     private func restoreLatestIntelligenceInsight(from logs: [StoredIntelligenceAnalysis]) {
+        if cycleUsageSummary?.status == .elevated || cycleUsageSummary?.status == .high {
+            refreshLocalIntelligenceInsight()
+            return
+        }
         guard let latest = logs.first(where: {
             $0.kind == .analysis &&
                 $0.status == .succeeded &&
@@ -2028,10 +2112,11 @@ final class BatteryViewModel: ObservableObject {
             memoryUsedPercent: system.memoryUsedPercent,
             diskUsedPercent: system.diskUsedPercent,
              learningDaysObserved: learningDaysObserved,
-             recentHistory: recentHistory,
-             processImpacts: processEvidence,
-             context: makeIntelligenceContext()
-         )
+              recentHistory: recentHistory,
+              processImpacts: processEvidence,
+              context: makeIntelligenceContext(),
+              cycleUsage: cycleUsageSummary
+          )
      }
 
      private func makeIntelligenceContext() -> IntelligenceContext {
@@ -2260,6 +2345,60 @@ final class BatteryViewModel: ObservableObject {
         defaults.set(enabled, forKey: "cellium.learningEnabled")
     }
 
+    func setCyclePlanEnabled(_ enabled: Bool) {
+        cyclePlanConfiguration.enabled = enabled
+        cyclePlanDidChange()
+    }
+
+    func setCyclePlanMode(_ mode: CyclePlanMode) {
+        cyclePlanConfiguration.mode = mode
+        if mode == .targetDate {
+            if cyclePlanConfiguration.targetDate == nil {
+                cyclePlanConfiguration.targetDate = Calendar.autoupdatingCurrent.date(
+                    byAdding: .year,
+                    value: 1,
+                    to: Date()
+                )
+            }
+            if cyclePlanConfiguration.targetCycleCount == nil {
+                cyclePlanConfiguration.targetCycleCount = (battery.cycleCount ?? 0) + 100
+            }
+        }
+        cyclePlanDidChange()
+    }
+
+    func setCycleWeeklyBudget(_ value: Double) {
+        cyclePlanConfiguration.weeklyEquivalentCycleBudget = min(100, max(0.1, value))
+        cyclePlanDidChange()
+    }
+
+    func setCycleTargetDate(_ date: Date) {
+        let tomorrow = Calendar.autoupdatingCurrent.date(byAdding: .day, value: 1, to: Date()) ?? Date()
+        cyclePlanConfiguration.targetDate = max(date, tomorrow)
+        cyclePlanDidChange()
+    }
+
+    func setCycleTargetCount(_ value: Int) {
+        cyclePlanConfiguration.targetCycleCount = max(battery.cycleCount ?? 0, value)
+        cyclePlanDidChange()
+    }
+
+    func setCycleAlertsEnabled(_ enabled: Bool) {
+        cyclePlanConfiguration.alertsEnabled = enabled
+        cyclePlanDidChange()
+    }
+
+    private func cyclePlanDidChange() {
+        persistCyclePlanConfiguration()
+        guard let store else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            try? await refreshCycleBudget(from: store, now: Date())
+            evaluateProactiveSignals()
+            refreshLocalIntelligenceInsight()
+        }
+    }
+
     func setTemperatureAlertCelsius(_ value: Double) {
         temperatureAlertCelsius = min(60, max(30, value))
         defaults.set(temperatureAlertCelsius, forKey: "cellium.temperatureAlertCelsius")
@@ -2478,6 +2617,9 @@ final class BatteryViewModel: ObservableObject {
             if recentSamples != nextRecentSamples {
                 recentSamples = nextRecentSamples
             }
+            try await refreshCycleBudget(from: store, now: now)
+            evaluateProactiveSignals()
+            refreshLocalIntelligenceInsight()
             refreshProcessImpactsIfNeeded(
                 at: now,
                 allowBackground: !panelVisible
@@ -2496,65 +2638,108 @@ final class BatteryViewModel: ObservableObject {
     }
 
     private func evaluateProactiveSignals() {
-        let candidate: ProactiveAlert?
+        var candidates: [(score: Int, alert: ProactiveAlert)] = []
+        if cyclePlanConfiguration.enabled,
+           cyclePlanConfiguration.alertsEnabled,
+           let summary = cycleUsageSummary,
+           summary.status == .elevated || summary.status == .high {
+            var measurements: [String: Double] = [
+                "todayEFC": summary.todayEquivalentCycles,
+                "rolling24HourEFC": summary.rolling24HourEquivalentCycles,
+                "todayUsagePercent": summary.todayUsagePercent,
+                "hardwareCycleDelta24h": Double(summary.rolling24HourHardwareCycleDelta),
+                "weeklyEFC": summary.weekEquivalentCycles
+            ]
+            if let projected = summary.projectedWeekEquivalentCycles {
+                measurements["projectedWeekEFC"] = projected
+            }
+            if let budget = summary.weeklyBudget {
+                measurements["weeklyBudgetEFC"] = budget
+            }
+            let critical = summary.status == .high
+            let alert = ProactiveAlert(
+                identifier: critical ? "cycle-pace-high" : "cycle-pace-elevated",
+                title: language == .spanish
+                    ? (critical ? "Ritmo de ciclos alto" : "Uso de batería elevado")
+                    : (critical ? "High cycle pace" : "Elevated battery use"),
+                body: language == .spanish
+                    ? String(
+                        format: "%.2f ciclos equivalentes y +%d ciclos medidos en 24 h. Es uso acumulado alto, no daño confirmado.",
+                        summary.rolling24HourEquivalentCycles,
+                        summary.rolling24HourHardwareCycleDelta
+                    )
+                    : String(
+                        format: "%.2f equivalent cycles and +%d measured cycles in 24h. This is high accumulated use, not confirmed damage.",
+                        summary.rolling24HourEquivalentCycles,
+                        summary.rolling24HourHardwareCycleDelta
+                    ),
+                severity: critical ? .critical : .warning,
+                measurements: measurements
+            )
+            candidates.append((critical ? 300 : 180, alert))
+        }
+
         if let app = processImpacts.first(where: { isHighMemoryImpact($0) }) {
             let memory = memoryDescription(for: app)
-            candidate = ProactiveAlert(
+            candidates.append((140, ProactiveAlert(
                 identifier: "memory:\(app.id)",
                 title: copy(.alertMemoryTitle),
                 body: String(format: copy(.appMemoryAlert), app.name, memory),
                 subject: app.name,
                 measurements: processMeasurements(for: app)
-            )
-        } else if let dischargeRate = effectiveBatteryPercentPerMinute, dischargeRate >= 0.35 {
-            candidate = ProactiveAlert(
+            )))
+        }
+        if let dischargeRate = effectiveBatteryPercentPerMinute, dischargeRate >= 0.35 {
+            candidates.append((160, ProactiveAlert(
                 identifier: "discharge",
                 title: copy(.alertDischargeTitle),
                 body: String(format: copy(.rapidDischargeAlert), dischargeRate),
                 measurements: ["percentPerMinute": dischargeRate]
-            )
-        } else if let app = processImpacts.first(where: { ($0.estimatedBatteryPercentPerMinute ?? 0) >= 0.05 }),
-                  let rate = app.estimatedBatteryPercentPerMinute {
-            candidate = ProactiveAlert(
+            )))
+        }
+        if let app = processImpacts.first(where: { ($0.estimatedBatteryPercentPerMinute ?? 0) >= 0.05 }),
+           let rate = app.estimatedBatteryPercentPerMinute {
+            candidates.append((130, ProactiveAlert(
                 identifier: "energy:\(app.id)",
                 title: copy(.alertEnergyTitle),
                 body: String(format: copy(.appEnergyAlert), app.name, rate),
                 subject: app.name,
                 measurements: processMeasurements(for: app, energyRate: rate)
-            )
-        } else if let app = processImpacts.first(where: { isHighCPUImpact($0) }) {
-            candidate = ProactiveAlert(
+            )))
+        }
+        if let app = processImpacts.first(where: { isHighCPUImpact($0) }) {
+            candidates.append((120, ProactiveAlert(
                 identifier: "cpu:\(app.id)",
                 title: copy(.alertCPUProcessTitle),
                 body: String(format: copy(.appCPUAlert), app.name, app.averageCPUPercent),
                 subject: app.name,
                 measurements: processMeasurements(for: app)
-            )
-        } else if let memory = system.memoryUsedPercent, memory >= 90 {
-            candidate = ProactiveAlert(
+            )))
+        }
+        if let memory = system.memoryUsedPercent, memory >= 90 {
+            candidates.append((110, ProactiveAlert(
                 identifier: "system-memory",
                 title: copy(.alertMemoryTitle),
                 body: String(format: copy(.memoryAlert), memory),
                 measurements: ["memoryPercent": memory]
-            )
-        } else {
-            candidate = nil
+            )))
         }
 
+        let candidate = candidates.max { $0.score < $1.score }?.alert
         proactiveAlert = candidate
-        guard let candidate else {
-            lastProactiveAlertKey = nil
-            lastProactiveAlertDate = nil
-            return
-        }
+        guard let candidate else { return }
         let now = Date()
-        if candidate.identifier == lastProactiveAlertKey,
-           let lastProactiveAlertDate,
-           now.timeIntervalSince(lastProactiveAlertDate) < 20 * 60 {
+        let cooldown: TimeInterval = candidate.identifier.hasPrefix("cycle-pace")
+            ? 6 * 60 * 60
+            : 20 * 60
+        let alertDateKey = "cellium.alert.lastDate.\(candidate.identifier)"
+        if let lastDate = defaults.object(forKey: alertDateKey) as? Date,
+           now.timeIntervalSince(lastDate) < cooldown {
             return
         }
         lastProactiveAlertKey = candidate.identifier
         lastProactiveAlertDate = now
+        defaults.set(now, forKey: alertDateKey)
         persistAlertEvent(candidate, occurredAt: now)
         onProactiveAlert?(candidate)
     }
@@ -3304,6 +3489,7 @@ struct QuickPanelView: View {
         case .protected: return CelliumBrand.accent
         case .charging: return CelliumBrand.accentStrong
         case .connectedNotCharging: return CelliumBrand.accentStrong
+        case .elevated: return CelliumBrand.warning
         case .attention: return CelliumBrand.critical
         }
     }

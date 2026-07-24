@@ -345,7 +345,7 @@ public actor BatteryIntelligenceService {
     private func systemPrompt(languageCode: String) -> String {
         let language = languageCode.lowercased().hasPrefix("es") ? "Spanish" : "English"
         return """
-        You are Cellium's battery evidence assistant. Answer in \(language). Use only the measured context supplied by Cellium, which may include the Mac model and macOS version, current outdoor weather, current battery/system readings, and up to seven days of local learning. Distinguish measured facts, estimates, and explanations. Health percentage and cycle count are different signals: do not infer battery damage, wear, or a required replacement unless the evidence supports that exact claim. Treat weather as environmental context, not proof of battery causation. If evidence is missing, say so. Never request secrets or passwords.
+        You are Cellium's battery evidence assistant. Answer in \(language). Use only the measured context supplied by Cellium, which may include the Mac model and macOS version, current outdoor weather, current battery/system readings, local learning, and deterministic cycle-usage analysis. Distinguish measured facts, estimates, and explanations. Hardware cycle count, estimated equivalent full cycles (EFC), and battery health are separate signals. Battery use can exceed 100% when more than one full-capacity equivalent is discharged; never clamp or reinterpret that value as charge level. Do not infer battery damage, wear, or a required replacement unless the evidence supports that exact claim. Treat Cellium's cycleUsage status and comparison as authoritative, and never claim use is usual when comparison is insufficientData. Treat weather as environmental context, not proof of battery causation. If evidence is missing, say so. Never request secrets or passwords.
 
         Format every response for a chat bubble with real Markdown. Use blank lines between paragraphs, put each bullet on its own line, and always include a space after sentence-ending punctuation before the next word. Never join separate sentences or sections, for example never write `stable.Right`; write `stable.` followed by a new paragraph. Keep the response concise and practical.
         """
@@ -358,12 +358,12 @@ public actor BatteryIntelligenceService {
     ) -> String {
         let language = languageCode.lowercased().hasPrefix("es") ? "Spanish" : "English"
         return """
-        In \(language), summarize the current battery state in 2-4 short paragraphs. Mention the most relevant measured facts, whether the current consumption appears ordinary only when the local evidence supports that comparison, and one practical next step. Keep the distinction between battery health, accumulated cycles, and recent discharge explicit. Use the Mac, weather, and weekly learning context when it is available. If weeklyLearning.observedDays is below 7, say that there is not enough learning history to infer a routine and do not recommend a notification.
+        In \(language), summarize the current battery state in 2-4 short paragraphs. Mention the most relevant measured facts, whether today's consumption is lower, usual, or higher only when cycleUsage.comparison supports that exact comparison, and one practical next step. Keep the distinction between battery health, measured hardware cycles, estimated equivalent cycles, and recent discharge explicit. Use the Mac, weather, and weekly learning context when it is available. If weeklyLearning.observedDays is below 7, do not infer a general routine. A deterministic cycleUsage.status of high can still require action without seven learning days; describe it as high throughput, never as confirmed damage.
 
         At the very end, on two separate lines, emit this machine-readable decision and keep it out of the prose:
         CELLIUM_ACTION_NEEDED: yes or no
         CELLIUM_ACTION: one short imperative action for the user, or none
-        Set yes only when at least 7 observed learning days show a concrete pattern that requires human action. Otherwise set no and none.
+        Set yes only when at least 7 observed learning days show a concrete pattern that requires human action, or when deterministic cycleUsage.status is high. Otherwise set no and none.
 
         Structured evidence:
         \(encoded(evidence))
@@ -381,7 +381,7 @@ public actor BatteryIntelligenceService {
         localInsight: BatteryInsight
     ) -> String {
         """
-        Current Cellium evidence follows. Treat it as the source of truth and do not invent values. The context can include the Mac model, macOS, current weather, and the last seven days of local learning. Use that learning to explain patterns only when there are at least 7 observed days; otherwise say that the history is still insufficient.
+        Current Cellium evidence follows. Treat it as the source of truth and do not invent values. The context can include the Mac model, macOS, current weather, local learning, and deterministic cycle usage. Use learning to explain general patterns only when enough days are present. You may report an absolute high cycle pace without that baseline when cycleUsage.status is high. Never equate high throughput with confirmed battery damage.
         \(encoded(evidence))
         Local interpretation: \(localInsight.summary)
         """
@@ -428,6 +428,7 @@ public actor BatteryIntelligenceService {
         }
 
         let eligible = evidence.learningDaysObserved >= 7
+            || evidence.cycleUsage?.isActionableHighPace == true
         let required = eligible && requested && actionMessage != nil
         let cleanedResponse = foundMarker
             ? displayLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)

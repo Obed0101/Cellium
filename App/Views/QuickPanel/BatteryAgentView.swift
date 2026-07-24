@@ -18,27 +18,70 @@ struct CelliumMarkdownText: View {
             : AssistantResponseFormatter.normalizeLineBreaks(markdown)
     }
 
-    private var markdownWithHardBreaks: String {
-        let lines = normalizedMarkdown.components(separatedBy: "\n")
-        return lines.enumerated().map { index, line in
-            guard index < lines.count - 1, !line.isEmpty, !line.hasSuffix("  ") else {
-                return line
+    var body: some View {
+        let blocks = AssistantMarkdownParser.parse(normalizedMarkdown)
+        VStack(alignment: .leading, spacing: 9) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                blockView(block)
             }
-            return line + "  "
-        }.joined(separator: "\n")
+        }
+        .textSelection(.enabled)
     }
 
-    var body: some View {
-        if let rendered = try? AttributedString(
-            markdown: markdownWithHardBreaks,
-            options: .init(interpretedSyntax: .full)
-        ) {
-            Text(rendered)
-                .textSelection(.enabled)
-        } else {
-            Text(normalizedMarkdown)
-                .textSelection(.enabled)
+    @ViewBuilder
+    private func blockView(_ block: AssistantMarkdownBlock) -> some View {
+        switch block.kind {
+        case .paragraph:
+            inlineText(block.content)
+        case let .heading(level):
+            inlineText(block.content)
+                .font(.system(
+                    size: max(13, 19 - CGFloat(level)),
+                    weight: level <= 2 ? .bold : .semibold,
+                    design: .rounded
+                ))
+        case .unorderedListItem:
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                Text("•")
+                    .fontWeight(.bold)
+                inlineText(block.content)
+            }
+        case let .orderedListItem(marker):
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                Text(marker)
+                    .font(.system(.body, design: .monospaced, weight: .semibold))
+                inlineText(block.content)
+            }
+        case .quote:
+            HStack(alignment: .top, spacing: 8) {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(CelliumBrand.border)
+                    .frame(width: 3)
+                inlineText(block.content)
+                    .foregroundStyle(CelliumBrand.muted)
+            }
+        case .code:
+            ScrollView(.horizontal, showsIndicators: false) {
+                Text(block.content)
+                    .font(.system(size: 11, weight: .regular, design: .monospaced))
+                    .fixedSize(horizontal: true, vertical: false)
+                    .padding(9)
+            }
+            .background(CelliumBrand.background.opacity(0.72), in: RoundedRectangle(cornerRadius: 8))
+        case .divider:
+            Divider()
+                .overlay(CelliumBrand.border)
         }
+    }
+
+    private func inlineText(_ content: String) -> Text {
+        if let rendered = try? AttributedString(
+            markdown: content,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        ) {
+            return Text(rendered)
+        }
+        return Text(content)
     }
 }
 

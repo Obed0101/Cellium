@@ -4,6 +4,20 @@ All notable changes to Cellium are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows semantic versioning where practical.
 
+## [0.1.9] - 2026-07-24
+
+### Added
+
+- Local Battery Plan with estimated equivalent full cycles (EFC), measured hardware-cycle deltas, personal pace baselines, weekly budgets and confidence-aware forecasts.
+- SQLite schema v4 storage for 15-minute and daily cycle-usage buckets, tracker state and idempotent backfill from retained battery samples.
+- Cycle-usage history, plan controls and elevated/critical pace alerts that distinguish heavy use from confirmed battery damage.
+- Cycle pace and deterministic local classifications in the evidence supplied to battery intelligence.
+
+### Fixed
+
+- Assistant Markdown now preserves paragraph separation and renders headings, lists, quotes and code as independent blocks instead of joining sentences.
+- Equivalent battery use is no longer visually capped at 100%, so values such as `1.59 EFC` appear as `159%`.
+
 ## [0.1.8] - 2026-07-23
 
 ### Added
