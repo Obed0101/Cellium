@@ -16,7 +16,7 @@
 
 Cellium is a native macOS menu bar app for understanding what is happening to your Mac's battery and power system. It collects the signals macOS exposes, keeps history in local SQLite storage, explains patterns without pretending that estimates are measurements, and gives you an optional AI assistant grounded in the same evidence.
 
-The current public release is **Cellium 0.1.10**.
+The current public release is **Cellium 0.1.11**.
 
 ## What Cellium answers
 
@@ -32,7 +32,7 @@ The current public release is **Cellium 0.1.10**.
 These screenshots show the current Cellium interface, including the live dashboard, history, Computer use, alerts and AI surfaces.
 
 <p align="center">
-  <img src="Documentation/images/sscellium.png" alt="Cellium dashboard with battery level, active cells, weather, health, cycles, system use and history" width="1000">
+  <img src="Documentation/images/sscellium-home-discharge.png" alt="Cellium home dashboard showing battery discharge, cycle use, system health and history" width="1000">
 </p>
 
 <p align="center"><sub>Live dashboard: current battery state, system context and historical signals in one glance.</sub></p>
@@ -45,7 +45,7 @@ These screenshots show the current Cellium interface, including the live dashboa
       <sub>Current state, health, power mode and 24-hour history</sub>
     </td>
     <td align="center" width="50%">
-      <img src="Documentation/images/sscellium2.png" alt="Cellium history page showing 24 hour battery history, Computer use and weekly learning" width="460">
+       <img src="Documentation/images/sscellium-history.png" alt="Cellium history page showing battery history, equivalent use and cycle activity" width="460">
       <br>
       <sub>History, Computer use and weekly learning</sub>
     </td>
@@ -57,7 +57,7 @@ These screenshots show the current Cellium interface, including the live dashboa
       <sub>Alerts and AI analysis history</sub>
     </td>
     <td align="center" width="50%">
-      <img src="Documentation/images/sscellium4.png" alt="Cellium AI assistant chat showing a battery analysis and conversation" width="460">
+       <img src="Documentation/images/sscellium-ai.png" alt="Cellium AI assistant explaining hardware cycles and estimated battery use" width="460">
       <br>
       <sub>Evidence-aware AI chat and analysis</sub>
     </td>
@@ -81,6 +81,7 @@ These screenshots show the current Cellium interface, including the live dashboa
 - SQLite-backed history for battery, power, temperature, system use and process samples.
 - Selectable windows from **1 hour, 2 hours, 6 hours, 12 hours and 24 hours** through **3 days, 7 days, 14 days, 30 days, 90 days, 6 months, 1 year and all history**.
 - Interactive charts with hover details for charge, power, temperature, CPU, memory and disk activity.
+- Page-specific refreshes and cached derived data avoid redundant work while navigating and scrolling through history.
 - Time windows keep their real resolution instead of silently collapsing everything into a misleading 24-hour average.
 - Missing readings remain missing instead of being replaced with invented precision.
 - Equivalent-use history uses 15-minute data for short windows and daily buckets for long windows, including hardware deltas, quality and observation gaps.
@@ -99,7 +100,7 @@ These screenshots show the current Cellium interface, including the live dashboa
 - Persistent alert history for battery, thermal, power and resource conditions.
 - Proactive alerts with severity, measurements and a clear explanation of the trigger.
 - Cycle-pace alerts distinguish elevated use from confirmed battery damage and prioritize critical `2 EFC / +2 cycles in 24h` signals.
-- Alerts can be reviewed, grouped by day and cleared from the Alerts surface.
+- Alerts can be reviewed and grouped by day in the Alerts surface.
 - Packaged app builds can request macOS notification permission and deliver proactive alerts through Notification Center.
 - Notification behavior is opt-in through the system permission flow; direct SwiftPM development launches do not pretend to be a packaged notification-capable app.
 
@@ -169,7 +170,7 @@ Intel compatibility, exact per-process wattage, charge automation and Apple-nota
 
 ## Install the latest release
 
-Download the current DMG from [GitHub Releases](https://github.com/Obed0101/Cellium/releases/latest). The current artifact is `Cellium-0.1.10.dmg`.
+Download the current DMG from [GitHub Releases](https://github.com/Obed0101/Cellium/releases/latest). The current artifact is `Cellium-0.1.11.dmg`; the matching ZIP is used by the in-app updater.
 
 The disk image contains `Cellium.app` and an `Applications` shortcut for drag-to-install. The free release is ad-hoc signed, not Apple-notarized, and macOS may require **System Settings → Privacy & Security → Open Anyway** on first launch. See [Documentation/DISTRIBUTION.md](Documentation/DISTRIBUTION.md) for Developer ID signing and notarization.
 
@@ -193,7 +194,7 @@ To create a local drag-to-Applications installer:
 
 ```bash
 ./Scripts/build-dmg.sh
-open Distribution/Cellium-0.1.10.dmg
+open Distribution/Cellium-0.1.11.dmg
 ```
 
 The distribution script validates the app bundle and DMG. It refuses to overwrite an existing disk image and supports Developer ID signing when configured. See [Documentation/DISTRIBUTION.md](Documentation/DISTRIBUTION.md).
@@ -220,7 +221,7 @@ Read [SECURITY.md](SECURITY.md) before reporting a vulnerability. Do not put cre
 
 ## Updates
 
-Cellium can check the public GitHub Releases API once per day when automatic checks are enabled, or immediately when the user presses **Check now** in Settings. It compares semantic versions, opens the public release page when an update exists and never downloads or executes a remote binary automatically.
+Cellium can check the public GitHub Releases API once per day when automatic checks are enabled, or immediately when the user presses **Check now** in Settings. When a newer release with a verified ZIP is available, **Update now** downloads it from GitHub, verifies its SHA-256 digest and bundle signature, then replaces and reopens the installed app after explicit user action. Releases without a verified updater package fall back to the public release page.
 
 ## Contributing
 
