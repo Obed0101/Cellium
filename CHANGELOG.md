@@ -4,6 +4,13 @@ All notable changes to Cellium are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows semantic versioning where practical.
 
+## [0.1.12] - 2026-07-25
+
+### Fixed
+
+- Release DMG and updater ZIP now build a universal `arm64` + `x86_64` app and verify both architectures before upload.
+- Release documentation clarifies the ad-hoc Gatekeeper **Open Anyway** step and the menu bar-only launch behavior.
+
 ## [0.1.11] - 2026-07-24
 
 ### Added

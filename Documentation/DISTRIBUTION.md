@@ -11,10 +11,10 @@ Run it from the repository root:
 
 ```bash
 ./Scripts/build-dmg.sh
-open Distribution/Cellium-0.1.11.dmg
+open Distribution/Cellium-0.1.12.dmg
 ```
 
-The script targets Apple Silicon by default and signs the complete app bundle ad hoc for local/free distribution. This produces a valid bundle, but it is **not Apple-verified or notarized**. On the first launch, macOS may require **System Settings → Privacy & Security → Open Anyway**.
+The script builds a universal `arm64` + `x86_64` app by default and signs the complete bundle ad hoc for local/free distribution. This produces a valid bundle, but it is **not Apple-verified or notarized**. On the first launch, macOS may require **System Settings → Privacy & Security → Open Anyway**; this is a Gatekeeper trust step, not an architecture conversion. Cellium is a menu bar app, so a successful launch appears in the macOS menu bar rather than as a normal Dock window.
 
 For a downloaded app that is known to come from this repository, the quarantine attribute can also be removed explicitly:
 
@@ -41,7 +41,7 @@ The script refuses to overwrite an existing disk image, verifies the app bundle 
 
 ## GitHub releases
 
-`.github/workflows/release.yml` runs for tags matching `v*`, builds the same valid ad-hoc-signed DMG and a ZIP update package on a macOS runner, and uploads both to the corresponding GitHub Release. This free workflow does not claim Apple verification or notarization; users may need **Open Anyway** or the `xattr` command above. Create the release from a protected `main` commit after CI has passed.
+`.github/workflows/release.yml` runs for tags matching `v*`, builds a universal `arm64` + `x86_64` ad-hoc-signed DMG and a matching ZIP update package on a macOS runner, verifies both architectures and uploads the artifacts to the corresponding GitHub Release. This free workflow does not claim Apple verification or notarization; users may need **Open Anyway** or the `xattr` command above. Create the release from a protected `main` commit after CI has passed.
 
 ## Update checks
 

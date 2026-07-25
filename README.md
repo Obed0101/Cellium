@@ -16,7 +16,7 @@
 
 Cellium is a native macOS menu bar app for understanding what is happening to your Mac's battery and power system. It collects the signals macOS exposes, keeps history in local SQLite storage, explains patterns without pretending that estimates are measurements, and gives you an optional AI assistant grounded in the same evidence.
 
-The current public release is **Cellium 0.1.11**.
+The current public release is **Cellium 0.1.12**.
 
 ## What Cellium answers
 
@@ -162,17 +162,17 @@ macOS power, system and process APIs
 ## Requirements
 
 - macOS 14 or later.
-- Apple Silicon is the currently validated development and distribution target.
+- Release artifacts are universal (`arm64` + `x86_64`); Apple Silicon is the currently validated runtime target.
 - Xcode with the Swift 6 toolchain for development.
 - An OpenRouter API key or a reachable Ollama endpoint is required only when the optional AI assistant is enabled.
 
-Intel compatibility, exact per-process wattage, charge automation and Apple-notarized distribution are not promises of the current release.
+Intel runtime coverage, exact per-process wattage, charge automation and Apple-notarized distribution are not promises of the current release.
 
 ## Install the latest release
 
-Download the current DMG from [GitHub Releases](https://github.com/Obed0101/Cellium/releases/latest). The current artifact is `Cellium-0.1.11.dmg`; the matching ZIP is used by the in-app updater.
+Download the current DMG from [GitHub Releases](https://github.com/Obed0101/Cellium/releases/latest). The current artifact is `Cellium-0.1.12.dmg`, built as a universal `arm64` + `x86_64` app; the matching ZIP is used by the in-app updater.
 
-The disk image contains `Cellium.app` and an `Applications` shortcut for drag-to-install. The free release is ad-hoc signed, not Apple-notarized, and macOS may require **System Settings → Privacy & Security → Open Anyway** on first launch. See [Documentation/DISTRIBUTION.md](Documentation/DISTRIBUTION.md) for Developer ID signing and notarization.
+The disk image contains `Cellium.app` and an `Applications` shortcut for drag-to-install. The free release is ad-hoc signed, not Apple-notarized, and macOS may require **System Settings → Privacy & Security → Open Anyway** on first launch. Cellium is a menu bar app, so after it launches its control appears in the macOS menu bar instead of opening a normal Dock window. See [Documentation/DISTRIBUTION.md](Documentation/DISTRIBUTION.md) for Developer ID signing and notarization.
 
 ## Build and test locally
 
@@ -194,7 +194,7 @@ To create a local drag-to-Applications installer:
 
 ```bash
 ./Scripts/build-dmg.sh
-open Distribution/Cellium-0.1.11.dmg
+open Distribution/Cellium-0.1.12.dmg
 ```
 
 The distribution script validates the app bundle and DMG. It refuses to overwrite an existing disk image and supports Developer ID signing when configured. See [Documentation/DISTRIBUTION.md](Documentation/DISTRIBUTION.md).

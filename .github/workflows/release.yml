@@ -28,12 +28,20 @@ jobs:
 
       - name: Build drag-to-Applications DMG
         env:
-          ARCHS: arm64
+          ARCHS: arm64 x86_64
+          ONLY_ACTIVE_ARCH: NO
+          DESTINATION: generic/platform=macOS
+          REQUIRE_UNIVERSAL: YES
           SIGNING_MODE: adhoc
           CODE_SIGNING_ALLOWED: NO
           CODE_SIGNING_REQUIRED: NO
           CODE_SIGN_IDENTITY: "-"
         run: ./Scripts/build-dmg.sh
+
+      - name: Verify universal app
+        run: |
+          APP_PATH=".build/CelliumInstallerDerivedData/Build/Products/Release/Cellium.app"
+          /usr/bin/lipo "$APP_PATH/Contents/MacOS/Cellium" -verify_arch arm64 x86_64
 
       - name: Build updater ZIP
         run: |

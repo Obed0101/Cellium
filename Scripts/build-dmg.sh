@@ -5,7 +5,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT_PATH="${PROJECT_PATH:-$ROOT_DIR/Cellium.xcodeproj}"
 SCHEME="${SCHEME:-Cellium}"
 CONFIGURATION="${CONFIGURATION:-Release}"
-ARCHS="${ARCHS:-arm64}"
+ARCHS="${ARCHS:-arm64 x86_64}"
+ONLY_ACTIVE_ARCH="${ONLY_ACTIVE_ARCH:-NO}"
+DESTINATION="${DESTINATION:-generic/platform=macOS}"
+REQUIRE_UNIVERSAL="${REQUIRE_UNIVERSAL:-YES}"
 DERIVED_DATA="${DERIVED_DATA:-$ROOT_DIR/.build/CelliumInstallerDerivedData}"
 OUTPUT_DIR="${OUTPUT_DIR:-$ROOT_DIR/Distribution}"
 VERSION="${VERSION:-$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$ROOT_DIR/App/Info.plist")}"
@@ -54,7 +57,9 @@ xcodebuild \
     -scheme "$SCHEME" \
     -configuration "$CONFIGURATION" \
     -derivedDataPath "$DERIVED_DATA" \
+    -destination "$DESTINATION" \
     ARCHS="$ARCHS" \
+    ONLY_ACTIVE_ARCH="$ONLY_ACTIVE_ARCH" \
     CODE_SIGNING_ALLOWED="$CODE_SIGNING_ALLOWED" \
     CODE_SIGNING_REQUIRED="$CODE_SIGNING_REQUIRED" \
     CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY" \
@@ -64,6 +69,16 @@ APP_PATH="$DERIVED_DATA/Build/Products/$CONFIGURATION/Cellium.app"
 if [[ ! -d "$APP_PATH" ]]; then
     printf 'Built app was not found at %s\n' "$APP_PATH" >&2
     exit 1
+fi
+
+APP_EXECUTABLE="$APP_PATH/Contents/MacOS/Cellium"
+if [[ ! -x "$APP_EXECUTABLE" ]]; then
+    printf 'Built executable was not found at %s\n' "$APP_EXECUTABLE" >&2
+    exit 1
+fi
+
+if [[ "$REQUIRE_UNIVERSAL" == "YES" ]]; then
+    /usr/bin/lipo "$APP_EXECUTABLE" -verify_arch arm64 x86_64
 fi
 
 case "$SIGNING_MODE" in
