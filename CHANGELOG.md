@@ -4,6 +4,25 @@ All notable changes to Cellium are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows semantic versioning where practical.
 
+## [0.1.12] - 2026-07-25
+
+### Fixed
+
+- Release DMG and updater ZIP now build a universal `arm64` + `x86_64` app and verify both architectures before upload.
+- Release documentation clarifies the ad-hoc Gatekeeper **Open Anyway** step and the menu bar-only launch behavior.
+
+## [0.1.11] - 2026-07-24
+
+### Added
+
+- GitHub release updates can download, verify and install the signed release package after an explicit user action.
+- Release automation now publishes an updater ZIP alongside the drag-to-Applications DMG.
+
+### Changed
+
+- History navigation loads only the data required by the selected page and avoids repeated derived-data work while scrolling.
+- Removed the visible clear-alerts and clear-intelligence-log controls from the history and alerts surfaces.
+
 ## [0.1.10] - 2026-07-24
 
 ### Added

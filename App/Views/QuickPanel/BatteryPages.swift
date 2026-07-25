@@ -12,11 +12,15 @@ struct BatteryHistoryPage: View {
      @State private var hoveredHistoryX: CGFloat = 0
      @State private var hoveredLearningDate: Date?
      @State private var hoveredLearningX: CGFloat = 0
-      @State private var hoveredCycleIndex: Int?
-      @State private var hoveredCycleX: CGFloat = 0
-      @State private var cachedProcessSummaries: [ProcessHistorySummary] = []
+       @State private var hoveredCycleIndex: Int?
+       @State private var hoveredCycleX: CGFloat = 0
+        @State private var cachedProcessSummaries: [ProcessHistorySummary] = []
+        @State private var cachedCycleHistoryPoints: [CycleHistoryPoint] = []
+        @State private var cachedWorkTimeSegments: [WorkTimeSegment] = []
+        @State private var cachedLearningHourSummaries: [LearningHourSummary] = []
+        @State private var cachedLearningAveragePowerWatts: Double?
 
-     private struct CycleHistoryPoint: Identifiable, Equatable {
+       private struct CycleHistoryPoint: Identifiable, Equatable {
          let date: Date
          let usagePercent: Double
          let equivalentCycles: Double
@@ -65,6 +69,24 @@ struct BatteryHistoryPage: View {
           cachedProcessSummaries = makeProcessSummaries(from: model.processHistorySamples)
       }
 
+      private func refreshCycleHistoryPoints() {
+          cachedCycleHistoryPoints = makeCycleHistoryPoints()
+      }
+
+      private func refreshWorkTimeSegments() {
+          cachedWorkTimeSegments = makeWorkTimeSegments()
+      }
+
+      private func refreshLearningDerivedData() {
+          cachedLearningHourSummaries = makeLearningHourSummaries()
+          let powerSamples = model.learningHourlyAggregates
+              .compactMap(\.averageBatteryPowerWatts)
+              .filter { $0.isFinite && abs($0) >= 0.05 }
+          cachedLearningAveragePowerWatts = powerSamples.isEmpty
+              ? nil
+              : powerSamples.reduce(0, +) / Double(powerSamples.count)
+      }
+
       private func observedMinutes(for samples: [StoredProcessSample]) -> Double {
           // fetchProcessSamples returns newest-first rows. Dictionary(grouping:)
           // preserves that order, so sorting every process again only adds work
@@ -79,7 +101,7 @@ struct BatteryHistoryPage: View {
 
      var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 16) {
+            LazyVStack(alignment: .leading, spacing: 16) {
                 hourlySection
                 cycleUsageSection
                 dayNightSection
@@ -90,9 +112,33 @@ struct BatteryHistoryPage: View {
          }
          .frame(maxWidth: .infinity, maxHeight: .infinity)
          .foregroundStyle(CelliumBrand.foreground)
-         .onAppear { refreshProcessSummaries() }
+         .onAppear {
+             refreshProcessSummaries()
+             refreshCycleHistoryPoints()
+             refreshWorkTimeSegments()
+             refreshLearningDerivedData()
+         }
          .onChange(of: model.processHistorySamples) { _, _ in
              refreshProcessSummaries()
+         }
+         .onChange(of: model.historyRange) { _, _ in
+             refreshCycleHistoryPoints()
+             refreshWorkTimeSegments()
+         }
+         .onChange(of: model.cycleUsageQuarterHourBuckets) { _, _ in
+             refreshCycleHistoryPoints()
+         }
+         .onChange(of: model.cycleUsageDailyBuckets) { _, _ in
+             refreshCycleHistoryPoints()
+         }
+         .onChange(of: model.hourlyAggregates) { _, _ in
+             refreshWorkTimeSegments()
+         }
+         .onChange(of: model.computerUseDate) { _, _ in
+             refreshWorkTimeSegments()
+         }
+         .onChange(of: model.learningHourlyAggregates) { _, _ in
+             refreshLearningDerivedData()
          }
      }
 
@@ -235,7 +281,12 @@ struct BatteryHistoryPage: View {
     }
 
     private var cycleUsageSection: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        let historyPoints = cycleHistoryPoints
+        let detailDays = cycleDetailDays
+        let historyMaximum = max(20, ceil((historyPoints.map(\.usagePercent).max() ?? 100) / 20) * 20)
+        let usesIntraday = usesIntradayCycleHistory
+
+        return VStack(alignment: .leading, spacing: 9) {
              sectionTitle(
                  model.language == .spanish ? "Uso equivalente y ciclos" : "Equivalent use and cycles",
                 subtitle: model.language == .spanish
@@ -247,7 +298,7 @@ struct BatteryHistoryPage: View {
                  cycleOverview(summary)
              }
 
-             if cycleHistoryPoints.isEmpty {
+             if historyPoints.isEmpty {
                 emptyState(text: model.language == .spanish
                     ? "Aún no hay historial de ciclos equivalente."
                     : "Equivalent cycle history is not available yet.")
@@ -262,8 +313,8 @@ struct BatteryHistoryPage: View {
                                 .foregroundStyle(CelliumBrand.muted)
                         }
 
-                     ForEach(cycleHistoryPoints) { point in
-                        if usesIntradayCycleHistory {
+                      ForEach(historyPoints) { point in
+                         if usesIntraday {
                             BarMark(
                                 x: .value(model.copy(.chartTime), point.date),
                                 y: .value("EFC", point.usagePercent)
@@ -292,7 +343,7 @@ struct BatteryHistoryPage: View {
                          .symbolSize(65)
                      }
                  }
-                 .chartYScale(domain: 0...cycleHistoryMaximum)
+                  .chartYScale(domain: 0...historyMaximum)
                 .chartXAxis { AxisMarks(values: .automatic(desiredCount: 5)) }
                 .chartYAxis {
                     AxisMarks(position: .leading) { value in
@@ -354,7 +405,7 @@ struct BatteryHistoryPage: View {
 
                     HStack(spacing: 12) {
                         Label(
-                            cycleQualityLabel(cycleHistoryPoints.last?.quality ?? .unavailable),
+                             cycleQualityLabel(historyPoints.last?.quality ?? .unavailable),
                             systemImage: "waveform.path.ecg"
                         )
                         Label(
@@ -378,7 +429,7 @@ struct BatteryHistoryPage: View {
                     .foregroundStyle(CelliumBrand.muted)
                 }
 
-                ForEach(Array(cycleDetailDays.reversed()), id: \.bucketStart) { bucket in
+                 ForEach(Array(detailDays.reversed()), id: \.bucketStart) { bucket in
                     HStack(spacing: 8) {
                         Text(bucket.bucketStart, format: .dateTime.day().month(.abbreviated))
                             .font(.system(size: 10, weight: .medium, design: .rounded))
@@ -431,7 +482,11 @@ struct BatteryHistoryPage: View {
         }
     }
 
-    private var cycleHistoryPoints: [CycleHistoryPoint] {
+      private var cycleHistoryPoints: [CycleHistoryPoint] {
+          cachedCycleHistoryPoints
+      }
+
+      private func makeCycleHistoryPoints() -> [CycleHistoryPoint] {
         if !usesIntradayCycleHistory {
             return filteredCycleDays.map {
                 CycleHistoryPoint(
@@ -603,9 +658,9 @@ struct BatteryHistoryPage: View {
          .background(CelliumBrand.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
      }
 
-     private var dayNightSection: some View {
+      private var dayNightSection: some View {
 
-        let segments = workTimeSegments
+         let segments = cachedWorkTimeSegments
         let hasMeasuredActivity = segments.contains { $0.activity != nil }
 
          return VStack(alignment: .leading, spacing: 8) {
@@ -704,7 +759,7 @@ struct BatteryHistoryPage: View {
          }
      }
 
-      private var workTimeSegments: [WorkTimeSegment] {
+       private func makeWorkTimeSegments() -> [WorkTimeSegment] {
           let calendar = Calendar.autoupdatingCurrent
           let window = model.computerUseDisplayWindow
           var slotStarts: [Date] = []
@@ -877,7 +932,7 @@ struct BatteryHistoryPage: View {
          let averagePowerWatts: Double?
      }
 
-     private var learningHourSummaries: [LearningHourSummary] {
+      private func makeLearningHourSummaries() -> [LearningHourSummary] {
          let calendar = Calendar.autoupdatingCurrent
          let grouped = Dictionary(grouping: model.learningHourlyAggregates) {
              calendar.component(.hour, from: $0.bucketStart)
@@ -898,20 +953,15 @@ struct BatteryHistoryPage: View {
          .sorted { $0.hour < $1.hour }
      }
 
-     private var learningPatternSummary: String? {
-         guard !learningHourSummaries.isEmpty else { return nil }
-         let peak = learningHourSummaries.max {
+      private var learningPatternSummary: String? {
+           guard !cachedLearningHourSummaries.isEmpty else { return nil }
+          let peak = cachedLearningHourSummaries.max {
              learningActivityScore(for: $0) < learningActivityScore(for: $1)
          }
          guard let peak else { return nil }
          let nextHour = (peak.hour + 1) % 24
          let window = String(format: "%02d:00–%02d:00", peak.hour, nextHour)
-         let averagePower = model.learningHourlyAggregates
-             .compactMap(\.averageBatteryPowerWatts)
-             .filter { $0.isFinite && abs($0) >= 0.05 }
-         let watts = averagePower.isEmpty
-             ? nil
-             : averagePower.reduce(0, +) / Double(averagePower.count)
+          let watts = cachedLearningAveragePowerWatts
 
          var parts: [String] = []
          if model.language == .spanish {
@@ -1106,7 +1156,7 @@ private struct WorkTimeTimeline: View {
     @State private var hoveredX: CGFloat = 0
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 30)) { timeline in
+        TimelineView(.periodic(from: .now, by: 60)) { timeline in
             ZStack {
                 timelineCanvas(date: timeline.date)
                 timelineLabels
@@ -1853,13 +1903,6 @@ struct BatteryAlertsPage: View {
                 Label(model.copy(.alerts), systemImage: "bell.badge")
                     .font(.system(size: 12, weight: .bold, design: .rounded))
                     .foregroundStyle(CelliumBrand.muted)
-                Spacer()
-                Button(model.copy(.clearAlerts)) {
-                    model.clearAlerts()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(model.alertEvents.isEmpty && model.proactiveAlert == nil)
             }
 
             if !model.intelligenceAnalysisLogs.isEmpty {
@@ -1907,24 +1950,19 @@ struct BatteryAlertsPage: View {
     private var intelligenceLogSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Label(model.copy(.intelligenceLog), systemImage: "sparkles")
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                 VStack(alignment: .leading, spacing: 2) {
+                     Label(model.copy(.intelligenceLog), systemImage: "sparkles")
+                         .font(.system(size: 11, weight: .bold, design: .rounded))
                         .tracking(0.6)
                         .foregroundStyle(CelliumBrand.muted)
                     Text(String(format: model.copy(.intelligenceLogDetail), model.intelligenceAnalysisCount))
-                        .font(.system(size: 9, weight: .regular, design: .rounded))
-                        .foregroundStyle(CelliumBrand.muted)
-                 }
-                 Spacer()
-                 Button(model.copy(.clearIntelligenceLog)) {
-                     model.clearIntelligenceAnalysisLog()
-                 }
-                 .buttonStyle(.bordered)
-                 .controlSize(.mini)
-                 Text(String(format: model.copy(.intelligenceRuns), model.intelligenceAnalysisCount))
-                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(CelliumBrand.signal)
+                         .font(.system(size: 9, weight: .regular, design: .rounded))
+                         .foregroundStyle(CelliumBrand.muted)
+                  }
+                  Spacer()
+                  Text(String(format: model.copy(.intelligenceRuns), model.intelligenceAnalysisCount))
+                     .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                     .foregroundStyle(CelliumBrand.signal)
             }
 
             ForEach(model.intelligenceAnalysisLogs) { run in
