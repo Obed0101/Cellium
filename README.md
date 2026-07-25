@@ -40,7 +40,7 @@ These screenshots show the current Cellium interface, including the live dashboa
 <table align="center">
   <tr>
     <td align="center" width="50%">
-      <img src="Documentation/images/sscellium1.png" alt="Cellium dashboard showing battery health, power mode, alerts and 24 hour history" width="460">
+      <img src="Documentation/images/sscellium-current-state.png" alt="Cellium current state showing battery health, power mode and 24-hour history" width="460">
       <br>
       <sub>Current state, health, power mode and 24-hour history</sub>
     </td>
