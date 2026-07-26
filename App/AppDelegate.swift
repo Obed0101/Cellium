@@ -48,7 +48,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A SwiftPM executable has no .app bundle proxy for UserNotifications.
         // Keep direct development launches safe; packaged app builds still ask once.
         guard Bundle.main.bundleURL.pathExtension == "app" else { return }
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        UNUserNotificationCenter.current().requestAuthorization(
+            options: [.alert, .sound],
+            completionHandler: Self.notificationAuthorizationCompleted
+        )
+    }
+
+    private nonisolated static func notificationAuthorizationCompleted(
+        _: Bool,
+        _: Error?
+    ) {
+        // UserNotifications invokes this callback on its own queue.
     }
 
     private func deliverProactiveAlert(_ alert: ProactiveAlert) {
